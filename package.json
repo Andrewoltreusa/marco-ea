@@ -1,0 +1,20 @@
+{
+  "name": "marco-ea",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Marco — Oltre Castings & Design's company secretary (Slack app, Trigger.dev).",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "lint:allowlist": "node scripts/verify-allowlist.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.0.0"
+  },
+  "dependencies": {
+    "@trigger.dev/sdk": "^3.0.0"
+  }
+}

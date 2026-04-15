@@ -27,9 +27,7 @@ Tier 2 users can ask any read-only query. They **cannot** trigger writes. They d
 |---|---|---|
 | Bella Babere | `U077KFWGAPP` | Customer Service / Follow-ups |
 | Alex Tretiakov | `U04J52R155H` | Daily Operations Manager |
-| Aleksandr Polkhovskiy | **CONFIRM — Slack ID not yet in `clients/oltre-castings/context/key-ids.md`** | Owner |
-
-**Pending action for Alex P.:** until his Slack ID is confirmed and added to this file, the router MUST treat unknown users as Tier 3. Do not guess.
+| Aleksandr Polkhovskiy | `U04DKJV7SAV` | Owner |
 
 Tier 2 capabilities:
 - All Phase-6 query skills (deal-status, lead-check, cash-position, agent-fleet-health, production-eta, find-in-vault).
@@ -70,3 +68,4 @@ After that one reply, Marco is silent for the rest of the 24-hour window. Every 
 | Date | Change | Author |
 |---|---|---|
 | 2026-04-15 | Initial allowlist: Andrew Tier 1, Bella + Alex T Tier 2, Alex P pending Slack ID | Marco bootstrap |
+| 2026-04-15 | Alex P Slack ID resolved to `U04DKJV7SAV`, promoted to Tier 2 active | Andrew confirmation |

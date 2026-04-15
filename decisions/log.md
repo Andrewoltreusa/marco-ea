@@ -40,6 +40,22 @@ Append-only record of architectural and trust decisions. Every entry: date, deci
 
 ---
 
+## 2026-04-15 — Locked answers to bootstrap CONFIRMs
+
+Andrew's replies to the Phase-1 confirmations:
+
+1. **Team morning brief delivery** → post to `#oltre-office` channel (not DMs). Channel is visible to the full team; keeps it lightweight.
+2. **Alex Polkhovskiy tier** → Tier 2. Slack user ID `U04DKJV7SAV` (corrected from an initially-pasted DM channel ID).
+3. **Slash command** → `/marco`.
+4. **AFK handling for Tier-1 writes** → **async-with-catch-up, 12-hour draft expiry.** Marco drafts to `projects/drafts/`, DMs Andrew a preview immediately, sends when Andrew ✅s. If a draft is older than 12 hours when Andrew reacts, Marco re-confirms ("still want this? the context may be stale") before sending. Expired drafts move to `projects/drafts/expired/`.
+5. **`deal-won-announce` skill** → **DROPPED.** Monday already handles this automation. Marco stays out of it. The skill file is not created.
+6. **Avatar** → Marco generates a spec for the Oltre Craftsman brand (single cobalt accent on white) and Andrew or Alex renders it later. Not a launch blocker.
+7. **GitHub repo** → authorized. Name: `marco-ea`. Private. Owner: Andrewoltreusa.
+8. **FreshBooks creds** → reuse from `oltre-agents/.env`. Marco reads that `.env` at runtime; it does not copy credentials into its own repo.
+9. **Trigger.dev project** → share existing project `proj_rfghiguuzwfekcixcuux` ("Oltre Castings & Design"). Marco's tasks live under a new `src/triggers/marco/` folder in the oltre-agents repo OR in Marco's own `src/triggers/` deployed to the same project — default to the latter unless deployment friction forces the former.
+
+---
+
 ## 2026-04-15 — Outbound Slack client is standalone, zero imports from oltre-agents
 
 **Decision:** `lib/slack.ts` reimplements the Slack Web API wrapper from scratch (copying the pattern from `oltre-agents/src/lib/slack.ts` but without sharing a module).

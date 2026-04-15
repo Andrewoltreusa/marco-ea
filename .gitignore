@@ -1,0 +1,16 @@
+node_modules/
+.env
+.env.local
+.env.*.local
+deliverables/*.md
+memory/2*.md
+memory/production-alert-state.json
+projects/drafts/
+!deliverables/.gitkeep
+!memory/.gitkeep
+!projects/drafts/.gitkeep
+.trigger/
+dist/
+*.log
+.DS_Store
+Thumbs.db

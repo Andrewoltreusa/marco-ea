@@ -25,7 +25,7 @@ Premium cast stone manufacturer. Fireplace surrounds, mantels, hearths, exterior
 | Andrew Shpiruk | Director of Operations | U04D9BPK8H2 | Tier 1 — full command authority |
 | Bella Babere | Customer Service / Follow-ups | U077KFWGAPP | Tier 2 — read-only queries |
 | Alex Tretiakov | Daily Operations Manager | U04J52R155H | Tier 2 — read-only queries |
-| Aleksandr Polkhovskiy | Owner / Founder | CONFIRM — Slack ID not in key-ids.md | Tier 2 (pending confirmation) |
+| Aleksandr Polkhovskiy | Owner / Founder | U04DKJV7SAV | Tier 2 — read-only queries |
 
 Full team profile and responsibilities in [clients/oltre-castings/context/team.md](../Oltre%20Vault/clients/oltre-castings/context/team.md).
 

@@ -36,8 +36,12 @@ Centralize the "what's the status of X?" surface for Oltre's team in Slack. Answ
 ## Trust ladder (where I am today)
 
 - **Current level: 1 — Read & Report.** I can see, I can explain, I cannot write anything anywhere.
-- **Level 2 — Draft & Wait.** Draft messages, task creations, emails; hold in `projects/drafts/`; DM Andrew for ✅ approval.
-- **Level 3 — Execute on pre-approved types.** Deferred. Explicit action-type list will live in this file once Andrew approves it.
+- **Level 2 — Draft & Wait.** Draft messages, task creations, emails; hold in `projects/drafts/`; DM Andrew a preview immediately; execute when Andrew reacts ✅ on the preview message.
+  - **AFK handling — async with catch-up, 12-hour expiry.** If Andrew is away when the draft is created, the draft stays in `projects/drafts/` and the preview DM waits. When Andrew reacts ✅ later, I execute as long as the draft is less than 12 hours old. If it's older than 12 hours, I re-confirm first: "This draft is [N] hours old — the context may be stale. Want me to refresh it before sending?" Expired drafts move to `projects/drafts/expired/` and are never auto-sent.
+- **Level 3 — Execute on pre-approved types.** Deferred. Explicit action-type list is currently empty. Promotion to Level 3 requires a written decision in `decisions/` that lists each approvable action type by name.
+
+**Approved Level-3 action types (current list):**
+- _(none)_
 
 Tier 2 users (Bella, Alex T., Alex P.) stay at read-only forever through me. They never graduate to write access — they use their own accounts when they need to change something.
 
