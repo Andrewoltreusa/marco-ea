@@ -17,32 +17,19 @@ Marco is a Slack app + a set of Trigger.dev tasks. This doc covers the manual st
 
 ---
 
-## Step 1 — Create the Marco Slack app
+## Step 1 — Create the Marco Slack app ✅ DONE 2026-04-15
 
-1. Go to <https://api.slack.com/apps> → **Create New App** → **From scratch**.
-2. Name: **Marco**. Workspace: Oltre HQ.
-3. Under **Basic Information**:
-   - Copy **Signing Secret** → save as `MARCO_SLACK_SIGNING_SECRET`
-   - Copy **App ID** → save as `MARCO_SLACK_APP_ID`
-4. Under **OAuth & Permissions** → **Bot Token Scopes**, add:
-   - `app_mentions:read`
-   - `channels:history`
-   - `channels:join`
-   - `channels:read`
-   - `chat:write`
-   - `commands`
-   - `files:write`
-   - `groups:history`
-   - `groups:read`
-   - `im:history`
-   - `im:read`
-   - `im:write`
-   - `reactions:read`
-   - `reactions:write`
-   - `users:read`
-5. Click **Install to Workspace**. Approve.
-6. Copy the **Bot User OAuth Token** (`xoxb-…`) → save as `MARCO_SLACK_BOT_TOKEN`.
-7. Under **App Home** → enable the **Messages Tab** and check "Allow users to send Slash commands and messages from the messages tab".
+App exists in Oltre HQ. Credentials live in `.env` (gitignored). **Never commit them to this file or any other tracked file.**
+
+Env var keys used throughout Marco:
+- `MARCO_SLACK_APP_ID`
+- `MARCO_SLACK_SIGNING_SECRET`
+- `MARCO_SLACK_BOT_TOKEN`
+
+Granted Bot Token Scopes:
+- `app_mentions:read`, `channels:history`, `channels:join`, `channels:read`, `chat:write`, `commands`, `files:write`, `groups:history`, `groups:read`, `im:history`, `im:read`, `im:write`, `reactions:read`, `reactions:write`, `users:read`
+
+Installed to workspace. App Home Messages Tab enabled with slash-command + DM input allowed.
 
 ### Icon + display name
 - Display name: **Marco**
