@@ -1,5 +1,34 @@
 # Marco — Install Guide
 
+## Step 0 — Push to GitHub
+
+The local repo at `c:\Users\AndrewShpiruk\Marco\` is committed but not yet pushed. `gh` CLI isn't installed on Andrew's current machine, so push is a manual step.
+
+**Option A — install gh, then one command:**
+```bash
+winget install --id GitHub.cli
+gh auth login
+cd "c:\Users\AndrewShpiruk\Marco"
+gh repo create Andrewoltreusa/marco-ea --private --source=. --remote=origin --push
+```
+
+**Option B — create via the GitHub web UI:**
+1. Go to <https://github.com/organizations/Andrewoltreusa/repositories/new>
+2. Name: `marco-ea`. Private. No README/gitignore/license (we have them locally).
+3. Then from the Marco folder:
+```bash
+cd "c:\Users\AndrewShpiruk\Marco"
+git remote add origin https://github.com/Andrewoltreusa/marco-ea.git
+git branch -M main
+git push -u origin main
+```
+
+Two commits should push: `baseline: Marco Phase 1 identity` and `phases 3-9: integrations smoke-tested, skills scaffolded, slack wiring, heartbeat`.
+
+---
+
+
+
 Marco is a Slack app + a set of Trigger.dev tasks. This doc covers the manual steps Andrew must do to bring Marco online. The code scaffolding is already in this repo.
 
 ## Prerequisites
