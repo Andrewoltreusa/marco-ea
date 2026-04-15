@@ -16,7 +16,7 @@
  * and a single ops surface.
  */
 
-import { schedules, logger } from "@trigger.dev/sdk/v3";
+import { schedules, logger } from "@trigger.dev/sdk";
 
 export const marcoHeartbeat = schedules.task({
   id: "comms/marco-heartbeat",

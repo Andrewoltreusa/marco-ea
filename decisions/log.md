@@ -56,6 +56,32 @@ Andrew's replies to the Phase-1 confirmations:
 
 ---
 
+## 2026-04-15 — Option A: Slack webhook front door lives in oltre-dashboard
+
+**Decision:** The Slack Request URL points at a Node-runtime route in the oltre-dashboard Next.js app: `oltre-dashboard/app/api/marco/slack/route.ts`. That route verifies the Slack signature, handles the `url_verification` challenge inline, parses form-urlencoded (slash commands) vs JSON (events), and fires `tasks.trigger("comms/marco-slack-inbound", payload)` on the shared Trigger.dev project. The actual skill work runs inside the Trigger.dev task.
+
+**Rationale:** Trigger.dev v4 tasks are not HTTP servers — they're invoked via `tasks.trigger()` from somewhere with a public URL. Three options were considered: (A) Node-runtime route in oltre-dashboard, (B) standalone Hono server on Fly/Railway, (C) add an HTTP server to oltre-agents. Andrew picked A: the original "don't touch oltre-dashboard" rule was about not needing a UI dashboard component, not about forbidding a forwarding route. This is the fastest path to live and reuses existing Vercel infra.
+
+**What this costs:**
+- One new file in oltre-dashboard: `app/api/marco/slack/route.ts` (~150 lines, auth + routing only, no business logic).
+- One new dependency in oltre-dashboard: `@trigger.dev/sdk@4.4.3`.
+- Three new env vars in Vercel + in the Trigger.dev project: `MARCO_SLACK_SIGNING_SECRET`, `MARCO_SLACK_BOT_TOKEN`, `TRIGGER_SECRET_KEY`.
+
+**What this does NOT change:**
+- Marco's identity, tasks, skills, and allowlist still live in `c:\Users\AndrewShpiruk\Oltre\Marco\`.
+- The Trigger.dev task still does all the work. The dashboard route is ~50 executable lines.
+- Marco's repo still has zero runtime imports from oltre-dashboard or oltre-agents.
+
+---
+
+## 2026-04-15 — Trigger.dev SDK bumped to 4.4.3
+
+**Decision:** Marco initially scaffolded with `@trigger.dev/sdk@^3.0.0` (wrong — my default). Bumped to `4.4.3` to match oltre-agents. Renamed `src/triggers` → `src/tasks` to match oltre-agents convention. `trigger.config.ts` points `dirs: ["src/tasks"]`.
+
+**Rationale:** Marco and oltre-agents share the Trigger.dev project `proj_rfghiguuzwfekcixcuux`. Aligned SDK versions prevent the two deploys from stepping on each other during runtime registration.
+
+---
+
 ## 2026-04-15 — Outbound Slack client is standalone, zero imports from oltre-agents
 
 **Decision:** `lib/slack.ts` reimplements the Slack Web API wrapper from scratch (copying the pattern from `oltre-agents/src/lib/slack.ts` but without sharing a module).
