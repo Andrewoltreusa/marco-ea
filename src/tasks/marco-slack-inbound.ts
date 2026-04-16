@@ -42,7 +42,14 @@ export interface NormalizedSlackEvent {
 export const marcoSlackInbound = task({
   id: "comms/marco-slack-inbound",
   maxDuration: 60,
-  run: async (payload: NormalizedSlackEvent) => {
+  run: async (payload: NormalizedSlackEvent & { __probe?: boolean }) => {
+    // Diagnostic probe — the Vercel route GET handler uses this to verify
+    // end-to-end trigger plumbing without producing any Slack side-effects.
+    if (payload.__probe === true) {
+      logger.info("probe received", { ts: new Date().toISOString() });
+      return { ok: true, probe: true, deploy: process.env.TRIGGER_DEPLOY_VERSION ?? "unknown" };
+    }
+
     logger.info("marco slack inbound", {
       source: payload.source,
       user: payload.slackUserId,
