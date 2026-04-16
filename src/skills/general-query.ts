@@ -72,17 +72,27 @@ async function extractSearchTerms(question: string): Promise<string[]> {
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
   const res = await client.messages.create({
     model: "claude-sonnet-4-6",
-    max_tokens: 200,
+    max_tokens: 300,
     system: `You extract search terms from a user's question about Oltre Castings & Design's business.
-Return a JSON array of 1-3 search terms (names of people, companies, projects, or deals) to look up in Monday.com boards.
+Return a JSON array of search terms to look up in Monday.com boards (Deals, Leads, Contacts, Production).
+
+CRITICAL: When a query mentions a compound entity (a person + company, or first+last name, or "X from Y"), return MULTIPLE variations:
+- The composite phrase
+- Each individual name part
+- The company alone
+
+This is because Monday items may be indexed under any of those (e.g. contact named just "Lynette Smith", account named just "Renaissance Homes", deal named "Lynette — Renaissance Homes 123 Main St").
+
 If the question is general (not about a specific entity), return an empty array [].
-Return ONLY the JSON array, no prose, no code fences.
+Return ONLY the JSON array, no prose, no code fences. Max 5 terms.
 
 Examples:
-"Have we ever worked with Bob Jones?" → ["Bob Jones"]
-"What's happening with the Rivertop and Schellenberg deals?" → ["Rivertop", "Schellenberg"]
+"Have we ever worked with Bob Jones?" → ["Bob Jones", "Bob", "Jones"]
+"What is the address for the Lynette Renaissance Homes project?" → ["Lynette Renaissance Homes", "Lynette", "Renaissance Homes"]
+"What's happening with Schellenberg?" → ["Schellenberg"]
+"Who's the contact for the Napa project?" → ["Napa"]
 "How many deals are closing this week?" → []
-"Who's the contact for the Napa project?" → ["Napa"]`,
+"Who from Acme did we last talk to?" → ["Acme"]`,
     messages: [{ role: "user", content: question }],
   });
 
@@ -139,12 +149,21 @@ async function composeAnswer(
     max_tokens: 500,
     system: `You are Marco, Oltre Castings & Design's company secretary. You answer questions about the business using Monday.com data provided below.
 
-Rules:
+OLTRE SYSTEMS CONTEXT (for correct redirects):
+- Pipeline, contacts, leads, production → Monday.com (what you have access to below)
+- Accounting / invoicing / cash / AR → **FreshBooks** (never "Xero" or "QuickBooks")
+- Internal state, agent health, dashboards → oltre-dashboard.vercel.app
+- Email → Gmail (Andrew) / Outlook (Bella @ bellab@oltreusa.com)
+- Slack workspace → Oltre HQ
+
+RULES:
 - Be concise: 2-4 sentences maximum.
-- Be specific: use actual names, dates, amounts, statuses from the data.
-- If you found matching items, reference them by name and board.
-- If no items matched, say so honestly: "I don't see [name] in our Monday boards (Deals, Leads, Contacts, or Production). They might be under a different name, or they may not be in the system yet."
-- Include a Monday link when referencing a specific item.
+- Be specific: use actual names, dates, amounts, statuses from the data below.
+- **Triangulate when you find partial matches.** If the user asked about "Lynette Renaissance Homes" and the data shows a contact named "Lynette" AND an account named "Renaissance Homes," combine them in your answer: "I see Lynette at Renaissance Homes in Contacts — here's what I have: [address/details]."
+- If a field like "Location" or "Address" is present in the columns, use it verbatim for address questions.
+- If you found matching items, reference them by name and board. Include the Monday link.
+- If nothing matches, tell the user what to try next: "I don't see [name] in Monday — try the company name alone, or check if they're recorded under [variation you can infer]."
+- For non-Monday data, redirect to the right system: "That's in FreshBooks, not Monday" (never say Xero or QuickBooks).
 - Don't make up data. Only use what's in the context below.
 - Don't use exclamation marks or emojis.
 - ${tier === 2 ? "This is a Tier 2 user — don't include financial details beyond deal value and status." : "This is Tier 1 (Andrew) — full detail."}
