@@ -77,10 +77,10 @@ Output: {"target":"","content":"","confidence":0.0}`;
 
 export async function parseWriteIntent(
   userMessage: string,
-): Promise<WriteIntentParsed> {
+): Promise<WriteIntentParsed & { _raw?: string }> {
   const client = anthropic();
   const res = await client.messages.create({
-    model: "claude-haiku-4-5-20251001",
+    model: "claude-sonnet-4-6",
     max_tokens: 300,
     system: SYSTEM_PROMPT,
     messages: [{ role: "user", content: userMessage }],
@@ -88,12 +88,17 @@ export async function parseWriteIntent(
 
   const textBlock = res.content.find((b) => b.type === "text");
   if (!textBlock || textBlock.type !== "text") {
-    return { target: "", content: "", confidence: 0 };
+    return { target: "", content: "", confidence: 0, _raw: "no_text_block" };
   }
 
-  const raw = textBlock.text.trim();
+  const raw = textBlock.text;
+  const extracted = extractJson(raw);
+  if (!extracted) {
+    return { target: "", content: "", confidence: 0, _raw: raw.slice(0, 400) };
+  }
+
   try {
-    const parsed = JSON.parse(raw) as WriteIntentParsed;
+    const parsed = JSON.parse(extracted) as WriteIntentParsed;
     if (
       typeof parsed.target === "string" &&
       typeof parsed.content === "string" &&
@@ -104,5 +109,30 @@ export async function parseWriteIntent(
   } catch {
     // fall through
   }
-  return { target: "", content: "", confidence: 0 };
+  return { target: "", content: "", confidence: 0, _raw: raw.slice(0, 400) };
+}
+
+/**
+ * Pull a JSON object out of a Claude response, tolerating:
+ *   - leading/trailing whitespace
+ *   - ```json ... ``` code fences
+ *   - ``` ... ``` unlabeled code fences
+ *   - prose before/after the JSON
+ *
+ * Returns the JSON string (ready for JSON.parse) or null if no braces found.
+ */
+function extractJson(text: string): string | null {
+  let s = text.trim();
+
+  // Strip markdown code fences. Handles ```json, ```JSON, or plain ```.
+  const fenceMatch = s.match(/^```(?:json|JSON)?\s*\n([\s\S]*?)\n```\s*$/);
+  if (fenceMatch) s = fenceMatch[1].trim();
+
+  // Find first { and last matching } — handles stray prose around JSON.
+  const firstBrace = s.indexOf("{");
+  const lastBrace = s.lastIndexOf("}");
+  if (firstBrace === -1 || lastBrace === -1 || lastBrace < firstBrace) {
+    return null;
+  }
+  return s.slice(firstBrace, lastBrace + 1);
 }

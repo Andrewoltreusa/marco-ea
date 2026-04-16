@@ -75,7 +75,12 @@ export const marcoMondayUpdateDraft = task({
 
     // ─── Parse the write intent with Claude ───────────────────
     const parsed = await parseWriteIntent(payload.rawText);
-    logger.info("intent parsed", { ...parsed });
+    logger.info("intent parsed", {
+      target: parsed.target,
+      content: parsed.content,
+      confidence: parsed.confidence,
+      rawClaudeResponse: parsed._raw ?? "(clean)",
+    });
 
     if (parsed.confidence < CONFIDENCE_THRESHOLD || !parsed.target || !parsed.content) {
       await postMessage({
@@ -86,7 +91,12 @@ export const marcoMondayUpdateDraft = task({
           "or *\"I'm meeting John Duncan tomorrow at 11\"*.",
         thread_ts: payload.threadTs,
       });
-      return { ok: true, reason: "low_confidence", confidence: parsed.confidence };
+      return {
+        ok: true,
+        reason: "low_confidence",
+        confidence: parsed.confidence,
+        rawClaudeResponse: parsed._raw ?? "(clean)",
+      };
     }
 
     // ─── Fuzzy search Monday ─────────────────────────────────
