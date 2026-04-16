@@ -27,6 +27,7 @@ import { dealStatus } from "../skills/deal-status.js";
 import { productionEta } from "../skills/production-eta.js";
 import { leadCheck } from "../skills/lead-check.js";
 import { agentFleetHealth } from "../skills/agent-fleet-health.js";
+import { generalQuery } from "../skills/general-query.js";
 
 export interface NormalizedSlackEvent {
   source: "slash_command" | "app_mention" | "message_im";
@@ -115,25 +116,26 @@ async function runSkill(
     case "agent-fleet-health":
       return { text: await agentFleetHealth(tier) };
     case "cash-position":
-      return {
-        text: "Cash-position isn't wired yet — Deals board columns show invoice status per deal. Try: *what's the status of [deal name]?*",
-      };
     case "find-in-vault":
-      return {
-        text: "Vault search isn't wired yet. Try asking about a specific deal, lead, or production item by name.",
-      };
+      // These don't have dedicated wiring — fall through to the general query
+      // which will search Monday and compose a natural answer.
+      return { text: await generalQuery(q || routed.args.query || "cash position", tier) };
     case "clarify":
-      return {
-        text:
-          "I didn't catch that. Try:\n" +
-          "• *what's the status of [client]?*\n" +
-          "• *when does [client] ship?*\n" +
-          "• *has [name] gotten back to us?*\n" +
-          "• *is anything broken?*\n" +
-          "• Or tell me something to log: *I spoke with [name] about [topic]*",
-      };
+      if (!q) {
+        return {
+          text:
+            "What would you like to know? Try:\n" +
+            "• *what's the status of [client]?*\n" +
+            "• *when does [client] ship?*\n" +
+            "• *has [name] gotten back to us?*\n" +
+            "• *is anything broken?*\n" +
+            "• Or tell me something to log: *I spoke with [name] about [topic]*",
+        };
+      }
+      // Non-empty clarify = the classifier wasn't sure. Let general query handle it.
+      return { text: await generalQuery(q, tier) };
     default:
-      return { text: "_(no handler)_" };
+      return { text: await generalQuery(q || "help", tier) };
   }
 }
 
