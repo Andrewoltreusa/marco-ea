@@ -21,8 +21,12 @@
 
 import { task, logger, tasks } from "@trigger.dev/sdk";
 import { routeInbound, type RoutedRequest } from "../slack/router.js";
-import { nameFor } from "../slack/allowlist.js";
+import { nameFor, type Tier } from "../slack/allowlist.js";
 import { postMessage } from "../../lib/slack.js";
+import { dealStatus } from "../skills/deal-status.js";
+import { productionEta } from "../skills/production-eta.js";
+import { leadCheck } from "../skills/lead-check.js";
+import { agentFleetHealth } from "../skills/agent-fleet-health.js";
 
 export interface NormalizedSlackEvent {
   source: "slash_command" | "app_mention" | "message_im";
@@ -95,31 +99,38 @@ export const marcoSlackInbound = task({
   },
 });
 
-/**
- * Stub skill dispatcher. Phase-6b will replace each case with a real
- * implementation that reads Monday / FreshBooks / the vault.
- */
 async function runSkill(
   routed: RoutedRequest,
 ): Promise<{ text: string; blocks?: unknown[] }> {
+  const q = routed.args.query ?? "";
+  const tier = routed.tier as 1 | 2;
+
   switch (routed.skill) {
     case "deal-status":
-    case "cash-position":
+      return { text: await dealStatus(q, tier) };
     case "production-eta":
+      return { text: await productionEta(q) };
     case "lead-check":
+      return { text: await leadCheck(q) };
     case "agent-fleet-health":
+      return { text: await agentFleetHealth(tier) };
+    case "cash-position":
+      return {
+        text: "Cash-position isn't wired yet — Deals board columns show invoice status per deal. Try: *what's the status of [deal name]?*",
+      };
     case "find-in-vault":
       return {
-        text:
-          `_(Marco v1 stub — \`${routed.skill}\` routed correctly for tier ${routed.tier}.` +
-          ` Real data wiring lands in Phase 6b.)_`,
+        text: "Vault search isn't wired yet. Try asking about a specific deal, lead, or production item by name.",
       };
     case "clarify":
       return {
         text:
-          "I didn't catch that. Try: *what's the status of [client]?*, *when does [client] ship?*, " +
-          "*what's AR at?*, *has [name] gotten back to us?*, *is anything broken?*, or " +
-          "*what do we know about [topic]?*",
+          "I didn't catch that. Try:\n" +
+          "• *what's the status of [client]?*\n" +
+          "• *when does [client] ship?*\n" +
+          "• *has [name] gotten back to us?*\n" +
+          "• *is anything broken?*\n" +
+          "• Or tell me something to log: *I spoke with [name] about [topic]*",
       };
     default:
       return { text: "_(no handler)_" };

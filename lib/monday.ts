@@ -188,6 +188,102 @@ export async function getItem(itemId: string): Promise<{
 }
 
 // ─────────────────────────────────────────────────────────────
+// Item fetch with column values (used by read skills)
+// ─────────────────────────────────────────────────────────────
+
+export interface ColumnValue {
+  id: string;
+  title: string;
+  type: string;
+  text: string | null;
+  value: string | null;
+}
+
+export interface ItemWithColumns {
+  id: string;
+  name: string;
+  boardId: string;
+  boardName: string;
+  url: string;
+  columns: Record<string, string>;
+  updates: Array<{ text: string; createdAt: string }>;
+}
+
+export async function getItemWithColumns(
+  itemId: string,
+  opts?: { includeUpdates?: boolean },
+): Promise<ItemWithColumns | null> {
+  const updatesClause = opts?.includeUpdates
+    ? `updates(limit: 3) { text_body created_at }`
+    : "";
+  const gql = `
+    query ($id: [ID!]!) {
+      items(ids: $id) {
+        id
+        name
+        board { id name }
+        column_values {
+          id
+          title
+          type
+          text
+        }
+        ${updatesClause}
+      }
+    }
+  `;
+  const data = await graphql<{
+    items: Array<{
+      id: string;
+      name: string;
+      board: { id: string; name: string };
+      column_values: Array<{ id: string; title: string; type: string; text: string | null }>;
+      updates?: Array<{ text_body: string; created_at: string }>;
+    }>;
+  }>(gql, { id: [itemId] });
+  const item = data.items?.[0];
+  if (!item) return null;
+
+  const columns: Record<string, string> = {};
+  for (const col of item.column_values) {
+    if (col.text) columns[col.title] = col.text;
+  }
+
+  return {
+    id: item.id,
+    name: item.name,
+    boardId: item.board.id,
+    boardName: item.board.name,
+    url: `https://oregonfivestar-company.monday.com/boards/${item.board.id}/pulses/${item.id}`,
+    columns,
+    updates: (item.updates ?? []).map((u) => ({
+      text: u.text_body,
+      createdAt: u.created_at,
+    })),
+  };
+}
+
+/**
+ * Fuzzy-find items and return the top match with full column values.
+ * Convenience wrapper used by read skills.
+ */
+export async function findAndLoad(
+  query: string,
+  opts?: { boards?: string[]; includeUpdates?: boolean },
+): Promise<{ item: ItemWithColumns; score: number } | null> {
+  const candidates = await fuzzyFindItems(query, {
+    limit: 1,
+    boards: opts?.boards,
+  });
+  if (candidates.length === 0 || candidates[0].score < 0.3) return null;
+  const full = await getItemWithColumns(candidates[0].id, {
+    includeUpdates: opts?.includeUpdates,
+  });
+  if (!full) return null;
+  return { item: full, score: candidates[0].score };
+}
+
+// ─────────────────────────────────────────────────────────────
 // WRITE: create_update (the only mutation Marco is allowed)
 // ─────────────────────────────────────────────────────────────
 
