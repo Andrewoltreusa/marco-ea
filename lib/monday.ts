@@ -224,9 +224,11 @@ export async function getItemWithColumns(
         board { id name }
         column_values {
           id
-          title
           type
           text
+          column {
+            title
+          }
         }
         ${updatesClause}
       }
@@ -237,7 +239,12 @@ export async function getItemWithColumns(
       id: string;
       name: string;
       board: { id: string; name: string };
-      column_values: Array<{ id: string; title: string; type: string; text: string | null }>;
+      column_values: Array<{
+        id: string;
+        type: string;
+        text: string | null;
+        column: { title: string };
+      }>;
       updates?: Array<{ text_body: string; created_at: string }>;
     }>;
   }>(gql, { id: [itemId] });
@@ -246,7 +253,7 @@ export async function getItemWithColumns(
 
   const columns: Record<string, string> = {};
   for (const col of item.column_values) {
-    if (col.text) columns[col.title] = col.text;
+    if (col.text) columns[col.column.title] = col.text;
   }
 
   return {
