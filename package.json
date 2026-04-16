@@ -19,6 +19,8 @@
     "vitest": "^2.0.0"
   },
   "dependencies": {
-    "@trigger.dev/sdk": "4.4.3"
+    "@anthropic-ai/sdk": "^0.80.0",
+    "@trigger.dev/sdk": "4.4.3",
+    "@upstash/redis": "^1.37.0"
   }
 }

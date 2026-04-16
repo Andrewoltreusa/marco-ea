@@ -10,18 +10,25 @@ Do not edit without an explicit written decision from Andrew Shpiruk in `decisio
 
 | Name | Slack ID | Current level |
 |---|---|---|
-| Andrew Shpiruk | `U04D9BPK8H2` | Level 1 (Read & Report) |
+| Andrew Shpiruk | `U04D9BPK8H2` | **Level 2 (Draft & Wait)** |
 
-Tier 1 capabilities (by trust level):
-- **Level 1 — current.** Can ask any query. Marco answers from reads only. No writes anywhere.
-- **Level 2 — not yet promoted.** Can request drafts (messages, tasks, emails). Marco drafts to `projects/drafts/` and DMs Andrew for ✅ reaction. Andrew confirms → Marco executes.
-- **Level 3 — deferred.** Execute on pre-approved action types without per-instance confirmation. List of approved types is currently empty. Promotion requires written decision in `decisions/`.
+Tier 1 capabilities at Level 2:
+- Every read skill (deal-status, production-eta, lead-check, agent-fleet-health, find-in-vault once wired).
+- **Monday `create_update` writes** via the draft-and-react-✅ flow. Target boards: Deals (`6466800590`), Leads (`6466800613`), Contacts (`6466800570`).
+- **12-hour draft TTL.** If Andrew reacts ✅ on a draft older than 12 hours, Marco re-confirms before firing.
+- Full signature freedom — Tier 1 drafts can be signed with any attribution Andrew wants, including `— Andrew via Marco` (default).
+- Receives all scheduled broadcasts and alerts.
+
+Tier 1 **cannot** (still deferred to Level 3):
+- Create new Monday items, change column values, move items between groups, delete anything
+- Write outside Monday (no FreshBooks writes, no Gmail sends, no vault file writes)
+- Promote Marco up the trust ladder — that takes a written decision in `decisions/log.md`
 
 ---
 
-## Tier 2 — Read-only queries, forever
+## Tier 2 — Read + Conversational Monday Updates (Level 2 scoped)
 
-Tier 2 users can ask any read-only query. They **cannot** trigger writes. They do not graduate to write access through Marco — if they need to change something, they use their own accounts.
+Tier 2 users can ask any read-only query AND request Monday `create_update` writes through the same draft-and-react-✅ flow as Tier 1, with additional guardrails.
 
 | Name | Slack ID | Role |
 |---|---|---|
@@ -30,9 +37,13 @@ Tier 2 users can ask any read-only query. They **cannot** trigger writes. They d
 | Aleksandr Polkhovskiy | `U04DKJV7SAV` | Owner |
 
 Tier 2 capabilities:
-- All Phase-6 query skills (deal-status, lead-check, cash-position, agent-fleet-health, production-eta, find-in-vault).
-- Receive scheduled broadcasts (team-morning-brief, friday-weekly-rollup, deal-won-announce).
-- Cannot: trigger scheduled runs on demand, draft messages for review, modify any external system.
+- All Phase-6 read skills (deal-status, lead-check, production-eta, agent-fleet-health, find-in-vault when wired).
+- Receive scheduled broadcasts (team-morning-brief, friday-weekly-rollup).
+- **Monday `create_update` writes**, same mutation Tier 1 gets, but with these extra rules:
+  - **2-hour draft TTL** (vs 12 hours for Tier 1). Expired Tier 2 drafts are silently discarded — no re-confirm flow.
+  - **Signature is forced to the requester's own name.** Bella cannot post an update signed "— Andrew via Marco". The router derives the signature from the Slack sender ID; the skill injects it; Tier 2 users cannot override it.
+  - **Only one active draft per user at a time.** If Bella asks Marco to draft a second update before reacting to her first, Marco tells her the first is still pending and asks her to ✅ or ❌ it first. This prevents mis-reactions on the wrong preview.
+- Cannot: trigger scheduled runs on demand, write to any board outside Deals/Leads/Contacts, request column value changes, create new Monday items, or do anything else beyond the `create_update` mutation.
 
 **Scoping rule:** Tier 2 users never see Tier-1-only output. `weekly-swot-company` is Andrew + Alex P only. `production-alert` DMs go to Alex T. and Andrew only. If a skill's output includes a field that is Tier-1-only, Marco redacts that field for Tier 2.
 
@@ -69,3 +80,4 @@ After that one reply, Marco is silent for the rest of the 24-hour window. Every 
 |---|---|---|
 | 2026-04-15 | Initial allowlist: Andrew Tier 1, Bella + Alex T Tier 2, Alex P pending Slack ID | Marco bootstrap |
 | 2026-04-15 | Alex P Slack ID resolved to `U04DKJV7SAV`, promoted to Tier 2 active | Andrew confirmation |
+| 2026-04-15 | **Phase 6a** — Marco promoted to **Level 2 (Draft & Wait)**. Tier 1 + Tier 2 can request Monday `create_update` writes gated by ✅ reaction. Tier 2 gets 2h TTL and forced self-signature; Tier 1 gets 12h TTL and signature freedom. See `decisions/2026-04-15-phase-6a-level-2.md`. | Andrew verbal decision in Slack |

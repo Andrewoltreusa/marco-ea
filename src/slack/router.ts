@@ -20,6 +20,7 @@ export type SkillName =
   | "lead-check"
   | "agent-fleet-health"
   | "find-in-vault"
+  | "monday-update"
   | "clarify"
   | "refuse";
 
@@ -80,12 +81,16 @@ export function routeInbound(evt: InboundEvent): RoutedRequest {
 }
 
 /**
- * Very small keyword-based intent classifier. Good enough for v1.
- * If nothing matches, we fall back to `find-in-vault` for Tier 1/2
- * or to `clarify` if the message is ambiguous and short.
+ * Keyword-based intent classifier.
  *
- * A Claude-powered classifier lives behind this for edge cases — see
- * src/slack/intent-llm.ts (TBD in a follow-up PR).
+ * Order matters. WRITE-intent detection runs FIRST — if a message looks
+ * like a write request, it goes to `monday-update` even if it also
+ * contains read keywords. This is because the skill's actual parser
+ * (Claude call in lib/anthropic.ts) is more accurate than this regex,
+ * and it will return confidence=0 for false positives, which the skill
+ * handles gracefully by falling back to clarify.
+ *
+ * Read classifiers only fire if we're confident there is NO write intent.
  */
 export function classifyIntent(
   raw: string,
@@ -93,6 +98,13 @@ export function classifyIntent(
   const text = raw.trim().toLowerCase();
 
   if (!text) return { skill: "clarify", args: { reason: "empty" } };
+
+  // ─────────────────────────────────────────────────────────
+  // WRITE intent — runs first, wins if matched
+  // ─────────────────────────────────────────────────────────
+  if (isWriteIntent(text)) {
+    return { skill: "monday-update", args: { query: raw.trim() } };
+  }
 
   // Cash / AR
   if (
@@ -140,6 +152,66 @@ export function classifyIntent(
 
   // Fallback: vault search with the full text as the query
   return { skill: "find-in-vault", args: { query: raw.trim() } };
+}
+
+/**
+ * Heuristic write-intent detector. Catches the common phrasings:
+ *   - Explicit commands: "update ... in monday", "add to monday", "log that ...", "note that ..."
+ *   - Action reports: "I'm meeting X", "spoke with X", "called X", "emailed X", "met with X"
+ *   - First-person future actions that imply "record this": "meeting X tomorrow", "calling X friday"
+ *
+ * Intentionally generous — false positives route to the Claude parser,
+ * which returns confidence=0 on non-write messages and the skill falls
+ * back to clarify. False NEGATIVES are worse because they silently drop
+ * the intent into `find-in-vault`, so we err on catching more.
+ */
+export function isWriteIntent(text: string): boolean {
+  // Explicit write verbs directed at Monday or at Marco
+  if (
+    /\b(update|add|log|note|record|save|put|post|write|append)\b.{0,30}\b(monday|deal|contact|lead|card|it|this|that)\b/.test(
+      text,
+    )
+  ) {
+    return true;
+  }
+  // "Note that X" / "Log that X" / "Remember that X" without a target object
+  if (/\b(note|log|remember)\s+(that|for)\b/.test(text)) {
+    return true;
+  }
+  // "Make sure X is in Monday" / "make sure X is updated"
+  if (
+    /\bmake\s+sure\b.{0,40}\b(updat|on monday|in monday|reflect|note|log)/.test(
+      text,
+    )
+  ) {
+    return true;
+  }
+  // First-person action reports: "I'm meeting X", "I spoke with X", "I called X"
+  // Trigger on past/present/future personal actions with a named object
+  if (
+    /\b(i'?m|i am|i)\s+(meeting|met with|spoke (with|to)|called|emailed|texted|messaged|saw|visited|toured|walking|reviewed|sent|quoted)\b/.test(
+      text,
+    )
+  ) {
+    return true;
+  }
+  // "Spoke with X" / "Met with X" without the leading "I"
+  if (
+    /^(spoke|met|called|emailed|texted|met with|talked to)\s+(with\s+)?[a-z]/.test(
+      text,
+    )
+  ) {
+    return true;
+  }
+  // "Can you" + action verb
+  if (
+    /\bcan you\b.{0,40}\b(updat|add|log|note|record|reflect|post|put)\b/.test(
+      text,
+    )
+  ) {
+    return true;
+  }
+  return false;
 }
 
 /**

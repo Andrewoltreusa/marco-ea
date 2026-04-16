@@ -19,8 +19,9 @@
  * Env: MARCO_SLACK_BOT_TOKEN (and all shared vars from oltre-agents)
  */
 
-import { task, logger } from "@trigger.dev/sdk";
+import { task, logger, tasks } from "@trigger.dev/sdk";
 import { routeInbound, type RoutedRequest } from "../slack/router.js";
+import { nameFor } from "../slack/allowlist.js";
 import { postMessage } from "../../lib/slack.js";
 
 export interface NormalizedSlackEvent {
@@ -63,6 +64,23 @@ export const marcoSlackInbound = task({
         });
       }
       return { ok: true, tier: 3, posted: !routed.rateLimited };
+    }
+
+    // ─── Phase 6a: write intent → draft task ─────────────────
+    if (routed.skill === "monday-update") {
+      if (routed.tier !== 1 && routed.tier !== 2) {
+        return { ok: true, tier: routed.tier, skill: "monday-update", ignored: "bad_tier" };
+      }
+      const requesterName = nameFor(payload.slackUserId) ?? "Unknown";
+      await tasks.trigger("comms/marco-monday-update-draft", {
+        rawText: payload.text,
+        requesterSlackId: payload.slackUserId,
+        requesterName,
+        requesterTier: routed.tier,
+        replyChannel: routed.replyChannel,
+        threadTs: routed.threadTs,
+      });
+      return { ok: true, tier: routed.tier, skill: "monday-update", delegated: true };
     }
 
     const response = await runSkill(routed);

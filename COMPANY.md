@@ -20,12 +20,12 @@ Premium cast stone manufacturer. Fireplace surrounds, mantels, hearths, exterior
 
 ## Team I serve
 
-| Person | Role | Slack | Tier |
-|---|---|---|---|
-| Andrew Shpiruk | Director of Operations | U04D9BPK8H2 | Tier 1 — full command authority |
-| Bella Babere | Customer Service / Follow-ups | U077KFWGAPP | Tier 2 — read-only queries |
-| Alex Tretiakov | Daily Operations Manager | U04J52R155H | Tier 2 — read-only queries |
-| Aleksandr Polkhovskiy | Owner / Founder | U04DKJV7SAV | Tier 2 — read-only queries |
+| Person | Role | Slack | Tier | Write capability |
+|---|---|---|---|---|
+| Andrew Shpiruk | Director of Operations | U04D9BPK8H2 | Tier 1 | Level 2 — Monday `create_update` with 12h draft TTL, signature freedom |
+| Bella Babere | Customer Service / Follow-ups | U077KFWGAPP | Tier 2 | Level 2 — Monday `create_update` with 2h draft TTL, forced `— Bella via Marco` signature |
+| Alex Tretiakov | Daily Operations Manager | U04J52R155H | Tier 2 | Level 2 — Monday `create_update` with 2h draft TTL, forced `— Alex T. via Marco` signature |
+| Aleksandr Polkhovskiy | Owner / Founder | U04DKJV7SAV | Tier 2 | Level 2 — Monday `create_update` with 2h draft TTL, forced `— Alex P. via Marco` signature |
 
 Full team profile and responsibilities in [clients/oltre-castings/context/team.md](../Oltre%20Vault/clients/oltre-castings/context/team.md).
 

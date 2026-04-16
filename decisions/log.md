@@ -56,6 +56,26 @@ Andrew's replies to the Phase-1 confirmations:
 
 ---
 
+## 2026-04-15 — Phase 6a: Marco promoted to Level 2 (Draft & Wait)
+
+**Decision:** Marco graduates from Level 1 (Read & Report) to Level 2 (Draft & Wait) six hours after going live. Both Tier 1 and Tier 2 users can now request Monday `create_update` writes through a draft → preview DM → ✅-reaction → execute flow. No other write mutations are allowed.
+
+**Tier 1 (Andrew):** 12-hour draft TTL, signature freedom, re-confirm on drafts older than 12h at ✅ time.
+
+**Tier 2 (Bella, Alex T., Alex P.):** 2-hour draft TTL, signature forced to `— {OwnName} via Marco` (no impersonation), expired drafts silently discarded, one active draft per user at a time.
+
+**What's allowed:** `create_update` mutation on existing items in Deals (`6466800590`), Leads (`6466800613`), or Contacts (`6466800570`) only.
+
+**What's still forbidden:** creating items, changing columns, moving items, deleting, writing to any other board, writing to any non-Monday system.
+
+**Rationale:** Level 1 stubs proved the full plumbing works end-to-end in 6 hours. The 2-week freeze was insurance against unknown integration risk — that insurance paid out already. The "Tier 2 never writes" rule was designed before we had a signature-based attribution pattern; with `— {Name} via Marco` body signatures and the ✅-reaction gate, Tier 2 writes have the same audit trail and blast radius as Tier 2 users typing the update themselves, just faster.
+
+**Full spec:** [decisions/2026-04-15-phase-6a-level-2.md](2026-04-15-phase-6a-level-2.md)
+
+**Revisit trigger:** 2026-04-22 (7-day review), or immediately on first write error / misinterpretation.
+
+---
+
 ## 2026-04-15 — Option A: Slack webhook front door lives in oltre-dashboard
 
 **Decision:** The Slack Request URL points at a Node-runtime route in the oltre-dashboard Next.js app: `oltre-dashboard/app/api/marco/slack/route.ts`. That route verifies the Slack signature, handles the `url_verification` challenge inline, parses form-urlencoded (slash commands) vs JSON (events), and fires `tasks.trigger("comms/marco-slack-inbound", payload)` on the shared Trigger.dev project. The actual skill work runs inside the Trigger.dev task.
