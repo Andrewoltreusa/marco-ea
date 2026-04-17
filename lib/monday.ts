@@ -147,12 +147,25 @@ export async function fuzzyFindItems(
 
 /**
  * Simple token overlap scorer. 1.0 = exact match, 0.0 = no overlap.
- * Weights: exact substring > all-tokens-present > some-tokens-present.
+ * Weights: exact substring > normalized substring > all-tokens-present
+ *   > some-tokens-present.
+ *
+ * Normalization strips non-alphanumerics (hyphens, spaces, slashes,
+ * parens) so deal-code typos like "C-26079" / "C26079" / "c 26 079"
+ * all match the item "C26079".
  */
 function scoreMatch(name: string, q: string, qTokens: string[]): number {
   if (!q) return 0;
   if (name === q) return 1.0;
   if (name.includes(q)) return 0.9;
+
+  const normName = name.replace(/[^a-z0-9]/g, "");
+  const normQ = q.replace(/[^a-z0-9]/g, "");
+  if (normQ.length >= 3) {
+    if (normName === normQ) return 0.95;
+    if (normName.includes(normQ)) return 0.85;
+    if (normQ.includes(normName) && normName.length >= 4) return 0.8;
+  }
 
   const nameTokens = name.split(/\s+/).filter(Boolean);
   const hits = qTokens.filter((t) => nameTokens.some((n) => n.includes(t)));

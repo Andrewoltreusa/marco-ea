@@ -96,7 +96,24 @@ export const marcoSlackInbound = task({
       return { ok: true, tier: routed.tier, skill: "monday-update", delegated: true };
     }
 
-    const response = await runSkill(routed);
+    let response: { text: string; blocks?: unknown[] };
+    try {
+      response = await runSkill(routed);
+    } catch (err) {
+      // Catch all — Marco must NEVER go silent on Tier 1/2 users.
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.error("skill failed", { skill: routed.skill, error: msg });
+      response = {
+        text:
+          `I hit a snag running \`${routed.skill}\` on that — ${msg.slice(0, 200)}. ` +
+          `Try rephrasing, or ask me something specific like *status of [client name]*.`,
+      };
+    }
+
+    if (!response.text || response.text.trim().length === 0) {
+      response.text = "I wasn't sure how to answer that. Try rephrasing, or ask for a specific deal, lead, or AR breakdown.";
+    }
+
     await postMessage({
       channel: routed.replyChannel,
       text: response.text,
