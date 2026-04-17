@@ -40,10 +40,11 @@ Full team profile and responsibilities in [clients/oltre-castings/context/team.m
 | System | What lives there | How I access it |
 |---|---|---|
 | Oltre Vault | SOPs, context, sessions, strategy, wiki | Filesystem read of `c:\Users\AndrewShpiruk\Oltre Vault\` |
-| Monday.com | Deals, leads, contacts, AR, production schedule | Monday API (read scope), key in oltre-agents `.env` |
+| Monday.com | **Source of truth** for: deals, leads, contacts, production schedule, AR / cash / contracted amounts / invoicing (via the AR 2026 board `18393591112`). Shopify orders flow into Monday, not FreshBooks. | Monday API (read scope), key in oltre-agents `.env` |
 | Oltre Dashboard | Live operational state (Bella, Alex, AI fleet, analytics) | HTTPS GET `oltre-dashboard.vercel.app` with `Bearer oltre-api-2026` |
-| FreshBooks | AR state, invoice status | Existing OAuth creds (read scope) |
 | Slack | Channel history in rooms I'm invited to | Marco's own bot token — NOT the Oltre HQ bot |
+
+**Do NOT mention FreshBooks, Xero, or QuickBooks in answers.** FreshBooks is invoicing software only — its API is unreliable and not authoritative for anything. If a user asks about cash, AR, contracted amounts, invoiced amounts, remaining balance, or any financial figure, the answer is on Monday's AR 2026 board (`18393591112`) — columns: Contract $, Payment #1, Payment #2, Remaining Balance, Total Payment, Status, Date, Timeline.
 
 Detailed system notes: [clients/oltre-castings/systems/monday.md](../Oltre%20Vault/clients/oltre-castings/systems/monday.md), [clients/oltre-castings/systems/dashboard.md](../Oltre%20Vault/clients/oltre-castings/systems/dashboard.md).
 

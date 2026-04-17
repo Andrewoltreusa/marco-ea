@@ -18,9 +18,11 @@ import Anthropic from "@anthropic-ai/sdk";
 import {
   fuzzyFindItems,
   getItemWithColumns,
+  getBoardItems,
   BOARDS,
   BOARD_NAMES,
   type ItemWithColumns,
+  type BoardItemRow,
 } from "../../lib/monday.js";
 import {
   loadConversation,
@@ -35,7 +37,20 @@ const ALL_SEARCH_BOARDS = [
   BOARDS.LEADS,
   BOARDS.CONTACTS,
   BOARDS.OCD_SCHEDULE,
+  BOARDS.AR_2026,
 ];
+
+/**
+ * Financial-question detector. When true, we inject the full AR 2026
+ * board as context so Claude can answer aggregate questions like
+ * "What's my contracted amount for April?" — Monday is the source of
+ * truth for AR / cash / contracted amounts, NOT FreshBooks.
+ */
+function isFinancialQuestion(text: string): boolean {
+  return /\b(cash|ar\b|accounts? receivable|contract(ed)?|invoiced?|paid|balance|outstanding|revenue|owed?|owes?|payment|amount|receivable|accounts received)\b/i.test(
+    text,
+  );
+}
 
 export async function generalQuery(
   question: string,
@@ -69,6 +84,19 @@ export async function generalQuery(
     }
   }
 
+  // Step 2.5: If the question is financial, also pull the full AR 2026
+  // board so Claude can answer aggregate questions (monthly totals,
+  // balances, contracted amounts) that don't map to a single entity.
+  let arBoardRows: BoardItemRow[] | null = null;
+  if (isFinancialQuestion(question)) {
+    try {
+      const board = await getBoardItems(BOARDS.AR_2026, { limit: 500 });
+      arBoardRows = board.items;
+    } catch {
+      // non-fatal: general-query still has per-entity results
+    }
+  }
+
   // Deduplicate by item ID
   const seen = new Set<string>();
   const unique = allResults.filter((r) => {
@@ -78,7 +106,7 @@ export async function generalQuery(
   });
 
   // Step 3: Have Claude compose the answer, with conversation history.
-  const answer = await composeAnswer(question, unique, tier, history);
+  const answer = await composeAnswer(question, unique, tier, history, arBoardRows);
 
   // Step 4: Save the turn so follow-ups have context.
   if (channelId) {
@@ -157,13 +185,14 @@ async function composeAnswer(
   results: Array<{ item: ItemWithColumns; query: string }>,
   tier: 1 | 2,
   history: ConversationTurn[] = [],
+  arRows: BoardItemRow[] | null = null,
 ): Promise<string> {
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-  // Build context from Monday results
+  // Build context from Monday per-entity search results
   let mondayContext = "";
   if (results.length === 0) {
-    mondayContext = "No matching items found in Monday.com (Deals, Leads, Contacts, or Production Schedule boards).";
+    mondayContext = "No matching items found in Monday.com (Deals, Leads, Contacts, Production Schedule, or AR 2026 boards) by entity name.";
   } else {
     mondayContext = results
       .map((r) => {
@@ -185,32 +214,49 @@ async function composeAnswer(
       .join("\n---\n");
   }
 
+  // Build AR 2026 board context if this is a financial question
+  let arContext = "";
+  if (arRows && arRows.length > 0) {
+    const rows = arRows
+      .map((r) => {
+        const cols = Object.entries(r.columns)
+          .filter(([, v]) => v && v.trim())
+          .map(([k, v]) => `${k}=${v}`)
+          .join(" | ");
+        return `- ${r.name} | ${cols}`;
+      })
+      .join("\n");
+    arContext = `\n\nFULL AR 2026 BOARD DUMP (${arRows.length} items, the authoritative source for all contracted / AR / cash questions):\n${rows}`;
+  }
+
   const res = await client.messages.create({
     model: "claude-opus-4-7",
-    max_tokens: 500,
+    max_tokens: 600,
     system: `You are Marco, Oltre Castings & Design's company secretary. You answer questions about the business using Monday.com data provided below.
 
-OLTRE SYSTEMS CONTEXT (for correct redirects):
-- Pipeline, contacts, leads, production → Monday.com (what you have access to below)
-- Accounting / invoicing / cash / AR → **FreshBooks** (never "Xero" or "QuickBooks")
+OLTRE SYSTEMS CONTEXT (authoritative — use these exactly):
+- Pipeline, contacts, leads, production → Monday.com (the boards below)
+- **Cash / AR / contracted amounts / invoicing / payments → Monday AR 2026 board** (NOT FreshBooks, NOT Xero, NOT QuickBooks). Shopify orders land in Monday, not FreshBooks — Monday is the source of truth.
 - Internal state, agent health, dashboards → oltre-dashboard.vercel.app
 - Email → Gmail (Andrew) / Outlook (Bella @ bellab@oltreusa.com)
 - Slack workspace → Oltre HQ
 
+Never mention FreshBooks, Xero, or QuickBooks in your answers. If the user asks about financial data, the answer lives in the AR 2026 board dump below.
+
 RULES:
-- Be concise: 2-4 sentences maximum.
+- Be concise: 2-4 sentences maximum unless the question requires a list/table.
 - Be specific: use actual names, dates, amounts, statuses from the data below.
-- **Triangulate when you find partial matches.** If the user asked about "Lynette Renaissance Homes" and the data shows a contact named "Lynette" AND an account named "Renaissance Homes," combine them in your answer: "I see Lynette at Renaissance Homes in Contacts — here's what I have: [address/details]."
-- If a field like "Location" or "Address" is present in the columns, use it verbatim for address questions.
-- If you found matching items, reference them by name and board. Include the Monday link.
-- If nothing matches, tell the user what to try next: "I don't see [name] in Monday — try the company name alone, or check if they're recorded under [variation you can infer]."
-- For non-Monday data, redirect to the right system: "That's in FreshBooks, not Monday" (never say Xero or QuickBooks).
+- **Triangulate when you find partial matches.** If the user asked about "Lynette Renaissance Homes" and the data shows a contact named "Lynette" AND an account named "Renaissance Homes," combine them: "I see Lynette at Renaissance Homes in Contacts — [details]."
+- For **financial aggregate questions** (monthly contracted totals, balances, AR by month, etc.), use the AR 2026 board dump below. Filter by date/timeline columns and sum Contract $ or Remaining Balance as appropriate.
+- If a field like "Location" or "Address" is present, use it verbatim for address questions.
+- If you found matching items, reference them by name and board. Include a Monday link when you can.
+- If nothing matches, tell the user what to try next — don't dead-end.
 - Don't make up data. Only use what's in the context below.
 - Don't use exclamation marks or emojis.
 - ${tier === 2 ? "This is a Tier 2 user — don't include financial details beyond deal value and status." : "This is Tier 1 (Andrew) — full detail."}
 
-Monday.com search results for this question:
-${mondayContext}`,
+Monday.com per-entity search results:
+${mondayContext}${arContext}`,
     messages: [
       ...toClaudeMessages(history),
       { role: "user", content: question },

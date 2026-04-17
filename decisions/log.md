@@ -4,6 +4,26 @@ Append-only record of architectural and trust decisions. Every entry: date, deci
 
 ---
 
+## 2026-04-17 — FreshBooks removed, Monday AR 2026 is source of truth for cash/AR
+
+**Decision:** Marco no longer references FreshBooks (or Xero, QuickBooks) in any answer. The Monday AR 2026 board (`18393591112`) is the single authoritative source for all financial questions: cash position, AR, contracted amounts, invoiced amounts, payments, remaining balance.
+
+**Rationale:** FreshBooks is invoicing software only, its API is unreliable, and — critically — Shopify orders land in Monday, not FreshBooks. FreshBooks doesn't have the full picture. Monday AR 2026 is the authoritative record. Previously Marco's system prompt said "Accounting / invoicing / cash / AR → FreshBooks" which caused Marco to redirect financial questions away from the answer.
+
+**What changed in code:**
+- `lib/monday.ts`: added `getBoardItems()` to dump an entire board with column values (needed for aggregate questions).
+- `src/skills/general-query.ts`:
+  - Added `isFinancialQuestion()` detector.
+  - Added AR_2026 to `ALL_SEARCH_BOARDS` for per-entity search.
+  - When the question is financial, injects the full AR 2026 board as context into Claude's prompt so aggregate questions (monthly contracted totals, etc.) can be answered.
+  - System prompt rewritten: Monday AR 2026 is the source of truth for cash/AR, FreshBooks is never mentioned.
+- `src/slack/router.ts`: Cash/AR/contracted/invoiced/balance keywords now route directly to `general-query` (not the dead-end `cash-position` skill) so they pick up the AR board dump.
+- `COMPANY.md`: FreshBooks row removed from "Systems I read" table.
+
+**Revisit trigger:** FreshBooks API becomes reliable AND we need data that's not in Monday. Until then, stay Monday-only.
+
+---
+
 ## 2026-04-15 — Initial bootstrap
 
 **Decision:** Marco is a standalone Slack app in Oltre HQ, separate from the existing bot `U0ALQ669ATB`. New Bot Token, new Signing Secret, new identity.

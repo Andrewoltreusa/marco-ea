@@ -119,11 +119,15 @@ export function classifyIntent(
     return { skill: "monday-update", args: { query: raw.trim() } };
   }
 
-  // Cash / AR
+  // Cash / AR / contracted / invoiced — route directly to general-query
+  // so it picks up the AR 2026 board dump. Keep the raw query text so
+  // Claude sees the full question (including month names like "April").
   if (
-    /\b(cash|ar\b|accounts receivable|owe(s|d)?|outstanding|overdue|aging)\b/.test(text)
+    /\b(cash|ar\b|accounts? receivable|owe(s|d)?|outstanding|overdue|aging|contract(ed)?|invoiced?|paid|balance|revenue|payment)\b/.test(
+      text,
+    )
   ) {
-    return { skill: "cash-position", args: {} };
+    return { skill: "general-query", args: { query: raw.trim() } };
   }
 
   // Production ETA

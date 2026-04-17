@@ -162,6 +162,88 @@ function scoreMatch(name: string, q: string, qTokens: string[]): number {
 }
 
 // ─────────────────────────────────────────────────────────────
+// Board dump — fetch ALL items on a board with column values
+// ─────────────────────────────────────────────────────────────
+
+export interface BoardItemRow {
+  id: string;
+  name: string;
+  url: string;
+  columns: Record<string, string>;
+}
+
+/**
+ * Fetch every item on a board with selected columns. Used for
+ * filter/aggregate questions like "What's my contracted amount for
+ * April?" where there's no single entity to search by name.
+ *
+ * Warning: boards with >500 items will hit the pagination limit.
+ * Oltre boards are all <500 items as of 2026-04-17 so this is fine.
+ */
+export async function getBoardItems(
+  boardId: string,
+  opts?: { limit?: number },
+): Promise<{ boardName: string; items: BoardItemRow[] }> {
+  const limit = opts?.limit ?? 500;
+  const gql = `
+    query ($boardId: [ID!]!, $limit: Int!) {
+      boards(ids: $boardId) {
+        id
+        name
+        items_page(limit: $limit) {
+          items {
+            id
+            name
+            column_values {
+              id
+              type
+              text
+              column { title }
+            }
+          }
+        }
+      }
+    }
+  `;
+  const data = await graphql<{
+    boards: Array<{
+      id: string;
+      name: string;
+      items_page: {
+        items: Array<{
+          id: string;
+          name: string;
+          column_values: Array<{
+            id: string;
+            type: string;
+            text: string | null;
+            column: { title: string };
+          }>;
+        }>;
+      };
+    }>;
+  }>(gql, { boardId: [boardId], limit });
+
+  const board = data.boards?.[0];
+  if (!board) return { boardName: "unknown", items: [] };
+
+  const items: BoardItemRow[] = board.items_page.items.map((item) => {
+    const columns: Record<string, string> = {};
+    for (const col of item.column_values) {
+      if (col.text) columns[col.column.title] = col.text;
+    }
+    return {
+      id: item.id,
+      name: item.name,
+      url: `https://oregonfivestar-company.monday.com/boards/${board.id}/pulses/${item.id}`,
+      columns,
+    };
+  });
+
+  return { boardName: board.name, items };
+}
+
+// ─────────────────────────────────────────────────────────────
 // Item fetch by ID (used by the reaction handler to re-verify target)
 // ─────────────────────────────────────────────────────────────
 
