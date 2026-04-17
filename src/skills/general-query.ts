@@ -92,18 +92,20 @@ function computeArAggregates(items: BoardItemRow[]): ArAggregates {
 
   let totalContract = 0;
   let totalPaid = 0;
-  let totalRemaining = 0;
 
   for (const item of items) {
     const contract = parse(item.columns["Contract $"]);
     const pay1 = parse(item.columns["Payment #1"]);
     const pay2 = parse(item.columns["Payment #2"]);
-    const remaining = parse(item.columns["Remaining Balance"]);
+    const paid = pay1 + pay2;
+    // Remaining is Contract - Paid (computed here rather than reading
+    // Monday's "Remaining Balance" formula column, which doesn't return
+    // a clean number via the API).
+    const remaining = contract - paid;
     const status = item.columns["Status"] || "—";
 
     totalContract += contract;
-    totalPaid += pay1 + pay2;
-    totalRemaining += remaining;
+    totalPaid += paid;
 
     const bucket = byStatusMap.get(status) ?? {
       count: 0,
@@ -113,10 +115,11 @@ function computeArAggregates(items: BoardItemRow[]): ArAggregates {
     };
     bucket.count += 1;
     bucket.contract += contract;
-    bucket.paid += pay1 + pay2;
+    bucket.paid += paid;
     bucket.remaining += remaining;
     byStatusMap.set(status, bucket);
   }
+  const totalRemaining = totalContract - totalPaid;
 
   const byStatus = Array.from(byStatusMap.entries())
     .map(([status, v]) => ({ status, ...v }))
@@ -365,7 +368,8 @@ RULES:
 - Be specific: use actual names, dates, amounts, statuses from the data below.
 - **Triangulate when you find partial matches.** If the user asked about "Lynette Renaissance Homes" and the data shows a contact named "Lynette" AND an account named "Renaissance Homes," combine them: "I see Lynette at Renaissance Homes in Contacts — [details]."
 - For **financial aggregate questions** (contracted total, cash, AR, balances, etc.): **ALWAYS use the "AR 2026 AUTHORITATIVE AGGREGATES" block verbatim. DO NOT add rows up yourself — you will make arithmetic errors.** If the user asks "what's my contracted amount" or similar full-board totals, report the pre-computed Total Contract $. If they ask about a specific status group (Deposit / Paid / Sample), use the By Status breakdown. Only drill down into individual rows when the user asks for specific items.
-- If the user asks for a date-filtered total (e.g. "contracted in April") and the board already scopes to that period (the whole AR 2026 board IS the current period's data), just report the full-board total and note the scope: "Across the AR 2026 board (all ${arAgg ? arAgg.totalItems : "N"} items): [total]."
+- **HARD RULE: Never compute a monthly / date-range subtotal by summing rows yourself.** If the user asks for a subset that isn't in the pre-computed aggregates block (e.g. "April only", "Q1", "last week"), respond: "I don't have that pre-computed. The full AR 2026 board (151 items) totals [number]. Want me to filter the raw rows to that date range and get back to you?" — and stop. Do NOT invent a subtotal by adding up rows from the raw dump. The rows are there for per-item lookups only.
+- If the user asks for a date-filtered total and the entire AR 2026 board represents the current year, just report the full board totals and explicitly state the scope: "Across the AR 2026 board (${arAgg ? arAgg.totalItems : "N"} items, full year 2026 to date): [total]."
 - If a field like "Location" or "Address" is present, use it verbatim for address questions.
 - If you found matching items, reference them by name and board. Include a Monday link when you can.
 - If nothing matches, tell the user what to try next — don't dead-end.
