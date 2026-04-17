@@ -230,7 +230,17 @@ export async function getBoardItems(
   const items: BoardItemRow[] = board.items_page.items.map((item) => {
     const columns: Record<string, string> = {};
     for (const col of item.column_values) {
-      if (col.text) columns[col.column.title] = col.text;
+      if (!col.text) continue;
+      const title = col.column.title;
+      // Title collision (e.g. AR 2026 has two columns both titled "Date"):
+      // keep the first non-empty value under the bare title, and expose
+      // the column id as a second key for disambiguation.
+      if (columns[title] === undefined) {
+        columns[title] = col.text;
+      }
+      // Always also store under the column id so callers can target
+      // specific columns when titles collide.
+      columns[`#${col.id}`] = col.text;
     }
     return {
       id: item.id,

@@ -58,7 +58,7 @@ interface ArAggregates {
   totalContract: number;
   /** Sum of Payment #1 + Payment #2 (cash in, across all items). */
   totalPaid: number;
-  /** Sum of Remaining Balance formula column. */
+  /** Contract - Paid. */
   totalRemaining: number;
   /** Per-status breakdown. */
   byStatus: Array<{
@@ -68,6 +68,44 @@ interface ArAggregates {
     paid: number;
     remaining: number;
   }>;
+  /** Per-month breakdown, keyed by YYYY-MM, sorted chronologically. */
+  byMonth: Array<{
+    month: string; // YYYY-MM
+    label: string; // e.g. "April 2026"
+    count: number;
+    contract: number;
+    paid: number;
+    remaining: number;
+  }>;
+}
+
+/** Pull a YYYY-MM out of the first available date column on an AR item. */
+function extractMonth(row: BoardItemRow): string | null {
+  // Priority order: specific date column IDs on AR 2026, then any Date title.
+  const candidates = [
+    row.columns["#dup__of_ship__date"],
+    row.columns["#date81"],
+    row.columns["Date"],
+    row.columns["#dup__of_due_date"],
+    row.columns["#dup__of_man__date"],
+  ];
+  for (const v of candidates) {
+    if (!v) continue;
+    // Monday date columns return "YYYY-MM-DD" or "YYYY-MM-DD HH:MM:SS".
+    const m = v.match(/(\d{4})-(\d{2})/);
+    if (m) return `${m[1]}-${m[2]}`;
+  }
+  return null;
+}
+
+const MONTH_NAMES = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+];
+function monthLabel(ym: string): string {
+  const [y, m] = ym.split("-");
+  const idx = parseInt(m, 10) - 1;
+  return `${MONTH_NAMES[idx] ?? m} ${y}`;
 }
 
 /**
@@ -89,6 +127,10 @@ function computeArAggregates(items: BoardItemRow[]): ArAggregates {
     string,
     { count: number; contract: number; paid: number; remaining: number }
   >();
+  const byMonthMap = new Map<
+    string,
+    { count: number; contract: number; paid: number; remaining: number }
+  >();
 
   let totalContract = 0;
   let totalPaid = 0;
@@ -98,26 +140,38 @@ function computeArAggregates(items: BoardItemRow[]): ArAggregates {
     const pay1 = parse(item.columns["Payment #1"]);
     const pay2 = parse(item.columns["Payment #2"]);
     const paid = pay1 + pay2;
-    // Remaining is Contract - Paid (computed here rather than reading
-    // Monday's "Remaining Balance" formula column, which doesn't return
-    // a clean number via the API).
     const remaining = contract - paid;
     const status = item.columns["Status"] || "—";
+    const month = extractMonth(item); // YYYY-MM or null
 
     totalContract += contract;
     totalPaid += paid;
 
-    const bucket = byStatusMap.get(status) ?? {
+    const sBucket = byStatusMap.get(status) ?? {
       count: 0,
       contract: 0,
       paid: 0,
       remaining: 0,
     };
-    bucket.count += 1;
-    bucket.contract += contract;
-    bucket.paid += paid;
-    bucket.remaining += remaining;
-    byStatusMap.set(status, bucket);
+    sBucket.count += 1;
+    sBucket.contract += contract;
+    sBucket.paid += paid;
+    sBucket.remaining += remaining;
+    byStatusMap.set(status, sBucket);
+
+    if (month) {
+      const mBucket = byMonthMap.get(month) ?? {
+        count: 0,
+        contract: 0,
+        paid: 0,
+        remaining: 0,
+      };
+      mBucket.count += 1;
+      mBucket.contract += contract;
+      mBucket.paid += paid;
+      mBucket.remaining += remaining;
+      byMonthMap.set(month, mBucket);
+    }
   }
   const totalRemaining = totalContract - totalPaid;
 
@@ -125,12 +179,17 @@ function computeArAggregates(items: BoardItemRow[]): ArAggregates {
     .map(([status, v]) => ({ status, ...v }))
     .sort((a, b) => b.contract - a.contract);
 
+  const byMonth = Array.from(byMonthMap.entries())
+    .map(([month, v]) => ({ month, label: monthLabel(month), ...v }))
+    .sort((a, b) => a.month.localeCompare(b.month));
+
   return {
     totalItems: items.length,
     totalContract,
     totalPaid,
     totalRemaining,
     byStatus,
+    byMonth,
   };
 }
 
@@ -323,6 +382,15 @@ async function composeAnswer(
           `  - ${s.status}: ${s.count} items | Contract ${fmtUsd(s.contract)} | Paid ${fmtUsd(s.paid)} | Remaining ${fmtUsd(s.remaining)}`,
       )
       .join("\n");
+    const monthLines =
+      arAgg.byMonth.length > 0
+        ? arAgg.byMonth
+            .map(
+              (m) =>
+                `  - ${m.label} (${m.month}): ${m.count} items | Contract ${fmtUsd(m.contract)} | Paid ${fmtUsd(m.paid)} | Remaining ${fmtUsd(m.remaining)}`,
+            )
+            .join("\n")
+        : "  (no items had a parseable date)";
     arContext += `
 
 AR 2026 AUTHORITATIVE AGGREGATES (pre-computed from all ${arAgg.totalItems} items on the board — use these EXACT numbers, do NOT recalculate):
@@ -332,6 +400,8 @@ AR 2026 AUTHORITATIVE AGGREGATES (pre-computed from all ${arAgg.totalItems} item
 - Total Remaining Balance (entire board): ${fmtUsd(arAgg.totalRemaining)}
 - By Status:
 ${statusLines}
+- By Month (bucketed by the item's Date column):
+${monthLines}
 `;
   }
   if (arRows && arRows.length > 0) {
@@ -367,9 +437,10 @@ RULES:
 - Be concise: 2-4 sentences maximum unless the question requires a list/table.
 - Be specific: use actual names, dates, amounts, statuses from the data below.
 - **Triangulate when you find partial matches.** If the user asked about "Lynette Renaissance Homes" and the data shows a contact named "Lynette" AND an account named "Renaissance Homes," combine them: "I see Lynette at Renaissance Homes in Contacts — [details]."
-- For **financial aggregate questions** (contracted total, cash, AR, balances, etc.): **ALWAYS use the "AR 2026 AUTHORITATIVE AGGREGATES" block verbatim. DO NOT add rows up yourself — you will make arithmetic errors.** If the user asks "what's my contracted amount" or similar full-board totals, report the pre-computed Total Contract $. If they ask about a specific status group (Deposit / Paid / Sample), use the By Status breakdown. Only drill down into individual rows when the user asks for specific items.
-- **HARD RULE: Never compute a monthly / date-range subtotal by summing rows yourself.** If the user asks for a subset that isn't in the pre-computed aggregates block (e.g. "April only", "Q1", "last week"), respond: "I don't have that pre-computed. The full AR 2026 board (151 items) totals [number]. Want me to filter the raw rows to that date range and get back to you?" — and stop. Do NOT invent a subtotal by adding up rows from the raw dump. The rows are there for per-item lookups only.
-- If the user asks for a date-filtered total and the entire AR 2026 board represents the current year, just report the full board totals and explicitly state the scope: "Across the AR 2026 board (${arAgg ? arAgg.totalItems : "N"} items, full year 2026 to date): [total]."
+- For **financial aggregate questions** (contracted total, cash, AR, balances, etc.): **ALWAYS use the "AR 2026 AUTHORITATIVE AGGREGATES" block verbatim. DO NOT add rows up yourself — you will make arithmetic errors.** If the user asks "what's my contracted amount" or similar full-board totals, report the pre-computed Total Contract $. If they ask about a specific status group (Deposit / Paid / Sample), use the By Status breakdown.
+- For **month-specific questions** (e.g. "contracted in April", "what about May?"): use the "By Month" breakdown in the aggregates block. Match the month name to the corresponding label (e.g. "April 2026" → use that row's numbers). Report the Contract / Paid / Remaining for that month exactly as pre-computed.
+- **HARD RULE: Never sum rows yourself to compute an aggregate.** The aggregates block has totals by Status and by Month already. If the user asks for a slice that isn't there (e.g. "Q1", "last week", a specific project by name), say "I don't have that pre-computed" rather than inventing a number. For per-item lookups by name, use the row dump — but only report that single row's fields, don't aggregate.
+- Only drill into individual rows from the raw dump when the user asks about a specific named item.
 - If a field like "Location" or "Address" is present, use it verbatim for address questions.
 - If you found matching items, reference them by name and board. Include a Monday link when you can.
 - If nothing matches, tell the user what to try next — don't dead-end.
