@@ -112,6 +112,10 @@ async function runSkill(
 ): Promise<{ text: string; blocks?: unknown[] }> {
   const q = routed.args.query ?? "";
   const tier = routed.tier as 1 | 2;
+  // Pass the reply channel to general-query so it can key conversation
+  // history in Redis. Keyword-matched skills (deal-status etc.) don't
+  // benefit from conversation memory yet, so they don't need this.
+  const ch = routed.replyChannel;
 
   switch (routed.skill) {
     case "deal-status":
@@ -126,7 +130,7 @@ async function runSkill(
     case "find-in-vault":
       // These don't have dedicated wiring — fall through to the general query
       // which will search Monday and compose a natural answer.
-      return { text: await generalQuery(q || routed.args.query || "cash position", tier) };
+      return { text: await generalQuery(q || routed.args.query || "cash position", tier, ch) };
     case "clarify":
       if (!q) {
         return {
@@ -140,9 +144,9 @@ async function runSkill(
         };
       }
       // Non-empty clarify = the classifier wasn't sure. Let general query handle it.
-      return { text: await generalQuery(q, tier) };
+      return { text: await generalQuery(q, tier, ch) };
     default:
-      return { text: await generalQuery(q || "help", tier) };
+      return { text: await generalQuery(q || "help", tier, ch) };
   }
 }
 

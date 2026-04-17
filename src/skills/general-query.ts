@@ -22,6 +22,13 @@ import {
   BOARD_NAMES,
   type ItemWithColumns,
 } from "../../lib/monday.js";
+import {
+  loadConversation,
+  appendTurn,
+  toClaudeMessages,
+  toTranscript,
+  type ConversationTurn,
+} from "../../lib/conversation.js";
 
 const ALL_SEARCH_BOARDS = [
   BOARDS.DEALS,
@@ -33,13 +40,19 @@ const ALL_SEARCH_BOARDS = [
 export async function generalQuery(
   question: string,
   tier: 1 | 2,
+  channelId?: string,
 ): Promise<string> {
   if (!question.trim()) {
     return "What would you like to know? Try asking about a deal, client, lead, or production item.";
   }
 
-  // Step 1: Extract search terms from the question using Claude
-  const searchTerms = await extractSearchTerms(question);
+  // Load conversation history for follow-up continuity (DMs only have context).
+  const history: ConversationTurn[] = channelId
+    ? await loadConversation(channelId)
+    : [];
+
+  // Step 1: Extract search terms — history helps Claude resolve pronouns.
+  const searchTerms = await extractSearchTerms(question, history);
 
   // Step 2: Search Monday for each term
   const allResults: Array<{ item: ItemWithColumns; query: string }> = [];
@@ -64,17 +77,40 @@ export async function generalQuery(
     return true;
   });
 
-  // Step 3: Have Claude compose the answer
-  return composeAnswer(question, unique, tier);
+  // Step 3: Have Claude compose the answer, with conversation history.
+  const answer = await composeAnswer(question, unique, tier, history);
+
+  // Step 4: Save the turn so follow-ups have context.
+  if (channelId) {
+    await appendTurn(channelId, {
+      at: new Date().toISOString(),
+      user: question,
+      assistant: answer,
+    });
+  }
+
+  return answer;
 }
 
-async function extractSearchTerms(question: string): Promise<string[]> {
+async function extractSearchTerms(
+  question: string,
+  history: ConversationTurn[],
+): Promise<string[]> {
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+  const transcript = toTranscript(history);
+  const userBlock =
+    history.length > 0
+      ? `Prior conversation:\n${transcript}\n\nCurrent question: ${question}`
+      : question;
+
   const res = await client.messages.create({
     model: "claude-sonnet-4-6",
     max_tokens: 300,
     system: `You extract search terms from a user's question about Oltre Castings & Design's business.
 Return a JSON array of search terms to look up in Monday.com boards (Deals, Leads, Contacts, Production).
+
+RESOLVE PRONOUNS using the prior conversation. "her", "them", "that", "the project" all refer to entities Marco mentioned in the most recent turn. Substitute the actual names before extracting terms.
 
 CRITICAL: When a query mentions a compound entity (a person + company, or first+last name, or "X from Y"), return MULTIPLE variations:
 - The composite phrase
@@ -92,8 +128,12 @@ Examples:
 "What's happening with Schellenberg?" → ["Schellenberg"]
 "Who's the contact for the Napa project?" → ["Napa"]
 "How many deals are closing this week?" → []
-"Who from Acme did we last talk to?" → ["Acme"]`,
-    messages: [{ role: "user", content: question }],
+"Who from Acme did we last talk to?" → ["Acme"]
+
+WITH prior context "Marco: I see Lynnette Sandgren at Renaissance Homes...":
+"pull up the latest update on her contact" → ["Lynnette Sandgren", "Renaissance Homes"]
+"what's her phone number?" → ["Lynnette Sandgren"]`,
+    messages: [{ role: "user", content: userBlock }],
   });
 
   const textBlock = res.content.find((b) => b.type === "text");
@@ -116,6 +156,7 @@ async function composeAnswer(
   question: string,
   results: Array<{ item: ItemWithColumns; query: string }>,
   tier: 1 | 2,
+  history: ConversationTurn[] = [],
 ): Promise<string> {
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -170,7 +211,10 @@ RULES:
 
 Monday.com search results for this question:
 ${mondayContext}`,
-    messages: [{ role: "user", content: question }],
+    messages: [
+      ...toClaudeMessages(history),
+      { role: "user", content: question },
+    ],
   });
 
   const textBlock = res.content.find((b) => b.type === "text");
