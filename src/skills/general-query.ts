@@ -52,6 +52,89 @@ function isFinancialQuestion(text: string): boolean {
   );
 }
 
+interface ArAggregates {
+  totalItems: number;
+  /** Sum of Contract $ across the whole board. */
+  totalContract: number;
+  /** Sum of Payment #1 + Payment #2 (cash in, across all items). */
+  totalPaid: number;
+  /** Sum of Remaining Balance formula column. */
+  totalRemaining: number;
+  /** Per-status breakdown. */
+  byStatus: Array<{
+    status: string;
+    count: number;
+    contract: number;
+    paid: number;
+    remaining: number;
+  }>;
+}
+
+/**
+ * Pre-compute sums from the AR 2026 board dump. Claude is given these
+ * as authoritative facts — it must NOT recalculate or disagree.
+ *
+ * Number parsing handles Monday's text-column formats:
+ *   "1500" / "1500.00" / "$1,500.00" / "" / undefined
+ */
+function computeArAggregates(items: BoardItemRow[]): ArAggregates {
+  const parse = (v: string | undefined): number => {
+    if (!v) return 0;
+    const cleaned = v.replace(/[$,\s]/g, "");
+    const n = parseFloat(cleaned);
+    return Number.isFinite(n) ? n : 0;
+  };
+
+  const byStatusMap = new Map<
+    string,
+    { count: number; contract: number; paid: number; remaining: number }
+  >();
+
+  let totalContract = 0;
+  let totalPaid = 0;
+  let totalRemaining = 0;
+
+  for (const item of items) {
+    const contract = parse(item.columns["Contract $"]);
+    const pay1 = parse(item.columns["Payment #1"]);
+    const pay2 = parse(item.columns["Payment #2"]);
+    const remaining = parse(item.columns["Remaining Balance"]);
+    const status = item.columns["Status"] || "—";
+
+    totalContract += contract;
+    totalPaid += pay1 + pay2;
+    totalRemaining += remaining;
+
+    const bucket = byStatusMap.get(status) ?? {
+      count: 0,
+      contract: 0,
+      paid: 0,
+      remaining: 0,
+    };
+    bucket.count += 1;
+    bucket.contract += contract;
+    bucket.paid += pay1 + pay2;
+    bucket.remaining += remaining;
+    byStatusMap.set(status, bucket);
+  }
+
+  const byStatus = Array.from(byStatusMap.entries())
+    .map(([status, v]) => ({ status, ...v }))
+    .sort((a, b) => b.contract - a.contract);
+
+  return {
+    totalItems: items.length,
+    totalContract,
+    totalPaid,
+    totalRemaining,
+    byStatus,
+  };
+}
+
+function fmtUsd(n: number): string {
+  return `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
 export async function generalQuery(
   question: string,
   tier: 1 | 2,
@@ -87,11 +170,15 @@ export async function generalQuery(
   // Step 2.5: If the question is financial, also pull the full AR 2026
   // board so Claude can answer aggregate questions (monthly totals,
   // balances, contracted amounts) that don't map to a single entity.
+  // We PRE-COMPUTE sums in code and pass them as authoritative facts —
+  // Claude is unreliable at arithmetic over 30+ rows.
   let arBoardRows: BoardItemRow[] | null = null;
+  let arAggregates: ArAggregates | null = null;
   if (isFinancialQuestion(question)) {
     try {
       const board = await getBoardItems(BOARDS.AR_2026, { limit: 500 });
       arBoardRows = board.items;
+      arAggregates = computeArAggregates(board.items);
     } catch {
       // non-fatal: general-query still has per-entity results
     }
@@ -106,7 +193,14 @@ export async function generalQuery(
   });
 
   // Step 3: Have Claude compose the answer, with conversation history.
-  const answer = await composeAnswer(question, unique, tier, history, arBoardRows);
+  const answer = await composeAnswer(
+    question,
+    unique,
+    tier,
+    history,
+    arBoardRows,
+    arAggregates,
+  );
 
   // Step 4: Save the turn so follow-ups have context.
   if (channelId) {
@@ -186,6 +280,7 @@ async function composeAnswer(
   tier: 1 | 2,
   history: ConversationTurn[] = [],
   arRows: BoardItemRow[] | null = null,
+  arAgg: ArAggregates | null = null,
 ): Promise<string> {
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -214,8 +309,28 @@ async function composeAnswer(
       .join("\n---\n");
   }
 
-  // Build AR 2026 board context if this is a financial question
+  // Build AR 2026 board context if this is a financial question.
+  // Pre-computed aggregates (arAgg) go FIRST as authoritative facts;
+  // the raw row dump follows for drill-down questions.
   let arContext = "";
+  if (arAgg) {
+    const statusLines = arAgg.byStatus
+      .map(
+        (s) =>
+          `  - ${s.status}: ${s.count} items | Contract ${fmtUsd(s.contract)} | Paid ${fmtUsd(s.paid)} | Remaining ${fmtUsd(s.remaining)}`,
+      )
+      .join("\n");
+    arContext += `
+
+AR 2026 AUTHORITATIVE AGGREGATES (pre-computed from all ${arAgg.totalItems} items on the board — use these EXACT numbers, do NOT recalculate):
+- Total items: ${arAgg.totalItems}
+- Total Contract $ (entire board): ${fmtUsd(arAgg.totalContract)}
+- Total Paid (Payment #1 + Payment #2 across entire board): ${fmtUsd(arAgg.totalPaid)}
+- Total Remaining Balance (entire board): ${fmtUsd(arAgg.totalRemaining)}
+- By Status:
+${statusLines}
+`;
+  }
   if (arRows && arRows.length > 0) {
     const rows = arRows
       .map((r) => {
@@ -226,7 +341,9 @@ async function composeAnswer(
         return `- ${r.name} | ${cols}`;
       })
       .join("\n");
-    arContext = `\n\nFULL AR 2026 BOARD DUMP (${arRows.length} items, the authoritative source for all contracted / AR / cash questions):\n${rows}`;
+    arContext += `
+FULL AR 2026 BOARD ITEMS (${arRows.length} rows — use for item-level lookups; for totals use the aggregates above):
+${rows}`;
   }
 
   const res = await client.messages.create({
@@ -247,7 +364,8 @@ RULES:
 - Be concise: 2-4 sentences maximum unless the question requires a list/table.
 - Be specific: use actual names, dates, amounts, statuses from the data below.
 - **Triangulate when you find partial matches.** If the user asked about "Lynette Renaissance Homes" and the data shows a contact named "Lynette" AND an account named "Renaissance Homes," combine them: "I see Lynette at Renaissance Homes in Contacts — [details]."
-- For **financial aggregate questions** (monthly contracted totals, balances, AR by month, etc.), use the AR 2026 board dump below. Filter by date/timeline columns and sum Contract $ or Remaining Balance as appropriate.
+- For **financial aggregate questions** (contracted total, cash, AR, balances, etc.): **ALWAYS use the "AR 2026 AUTHORITATIVE AGGREGATES" block verbatim. DO NOT add rows up yourself — you will make arithmetic errors.** If the user asks "what's my contracted amount" or similar full-board totals, report the pre-computed Total Contract $. If they ask about a specific status group (Deposit / Paid / Sample), use the By Status breakdown. Only drill down into individual rows when the user asks for specific items.
+- If the user asks for a date-filtered total (e.g. "contracted in April") and the board already scopes to that period (the whole AR 2026 board IS the current period's data), just report the full-board total and note the scope: "Across the AR 2026 board (all ${arAgg ? arAgg.totalItems : "N"} items): [total]."
 - If a field like "Location" or "Address" is present, use it verbatim for address questions.
 - If you found matching items, reference them by name and board. Include a Monday link when you can.
 - If nothing matches, tell the user what to try next — don't dead-end.
