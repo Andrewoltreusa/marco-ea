@@ -186,7 +186,7 @@ async function composeAnswer(
   }
 
   const res = await client.messages.create({
-    model: "claude-sonnet-4-6",
+    model: "claude-opus-4-7",
     max_tokens: 500,
     system: `You are Marco, Oltre Castings & Design's company secretary. You answer questions about the business using Monday.com data provided below.
 

@@ -20,9 +20,11 @@ export type SkillName =
   | "lead-check"
   | "agent-fleet-health"
   | "find-in-vault"
+  | "kb-query"
   | "monday-update"
   | "clarify"
-  | "refuse";
+  | "refuse"
+  | "general-query";
 
 export interface InboundEvent {
   slackUserId: string;
@@ -100,7 +102,18 @@ export function classifyIntent(
   if (!text) return { skill: "clarify", args: { reason: "empty" } };
 
   // ─────────────────────────────────────────────────────────
-  // WRITE intent — runs first, wins if matched
+  // READ-intent overrides — run FIRST, catch "update" as a noun
+  //
+  // These phrasings look like writes to the isWriteIntent regex
+  // because of words like "update" / "note" appearing near board
+  // nouns, but they're read requests. Force them to general-query.
+  // ─────────────────────────────────────────────────────────
+  if (isReadNounIntent(text)) {
+    return { skill: "general-query", args: { query: raw.trim() } };
+  }
+
+  // ─────────────────────────────────────────────────────────
+  // WRITE intent — runs after the read override
   // ─────────────────────────────────────────────────────────
   if (isWriteIntent(text)) {
     return { skill: "monday-update", args: { query: raw.trim() } };
@@ -145,6 +158,27 @@ export function classifyIntent(
     return { skill: "deal-status", args: { query: extractSubject(raw) } };
   }
 
+  // KB (process / how-to) — runs BEFORE find-in-vault so process
+  // questions route to the Monday-hosted KB via Opus 4.7 with prompt
+  // caching, instead of falling through to a vault text search.
+  if (
+    /\b(how do i|how does|what'?s the process|what'?s our|steps? (to|for)|walk me through|remind me how|procedure|sop|where do i|when should i|cadence|sequence|template|brand voice)\b/i.test(
+      raw,
+    )
+  ) {
+    return { skill: "kb-query", args: { query: raw.trim() } };
+  }
+  if (/^how\b/i.test(raw)) {
+    return { skill: "kb-query", args: { query: raw.trim() } };
+  }
+  if (
+    /\b(follow[- ]up|sendblue|intake|\/intake|\/bella|\/alex|\/operations|\/checks|\/quote)\b/i.test(
+      raw,
+    )
+  ) {
+    return { skill: "kb-query", args: { query: raw.trim() } };
+  }
+
   // Vault lookup ("what do we know about X")
   if (/\b(what do we know|vault|find|look up)\b/.test(text)) {
     return { skill: "find-in-vault", args: { query: extractSubject(raw) } };
@@ -152,6 +186,52 @@ export function classifyIntent(
 
   // Fallback: vault search with the full text as the query
   return { skill: "find-in-vault", args: { query: raw.trim() } };
+}
+
+/**
+ * Read-intent overrides that use "update"/"note"/"log" as nouns
+ * rather than verbs. These would otherwise be misclassified as
+ * write intents. Returns true if the message is clearly asking
+ * to read the updates feed, not to add to it.
+ *
+ * Examples that should match (all route to general-query):
+ *   "Pull up the latest update on her contact"
+ *   "Show me the most recent update on Rivertop"
+ *   "What are the updates on that deal?"
+ *   "Any recent notes on this lead?"
+ *   "Read the last update"
+ *   "What's on her contact"
+ *   "Walk me through the updates"
+ */
+export function isReadNounIntent(text: string): boolean {
+  // "the latest/last/most recent/any/all [note|update|comment]"
+  // "pull up/show me/read the [update|note|comment]"
+  // Core signal: update/note/log/comment used WITH a determiner
+  // ("the", "any", "all", "recent") before it, or preceded by a
+  // read verb ("pull", "show", "read", "see", "fetch").
+  if (
+    /\b(the|any|all|latest|recent|most recent|last)\s+(update|note|comment|message)s?\b/.test(
+      text,
+    )
+  ) {
+    return true;
+  }
+  if (
+    /\b(pull up|show me|read|fetch|see|bring up|display|tell me about|walk me through)\b.{0,40}\b(update|note|comment|message|contact|record|details?|info)/.test(
+      text,
+    )
+  ) {
+    return true;
+  }
+  // "what are the updates" / "is there any update" / "any recent notes"
+  if (
+    /\b(what|is there|are there|any)\b.{0,25}\b(update|note|comment)s?\b/.test(
+      text,
+    )
+  ) {
+    return true;
+  }
+  return false;
 }
 
 /**

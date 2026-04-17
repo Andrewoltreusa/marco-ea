@@ -28,6 +28,7 @@ import { productionEta } from "../skills/production-eta.js";
 import { leadCheck } from "../skills/lead-check.js";
 import { agentFleetHealth } from "../skills/agent-fleet-health.js";
 import { generalQuery } from "../skills/general-query.js";
+import { kbQuery } from "../skills/kb-query.js";
 
 export interface NormalizedSlackEvent {
   source: "slash_command" | "app_mention" | "message_im";
@@ -126,11 +127,39 @@ async function runSkill(
       return { text: await leadCheck(q) };
     case "agent-fleet-health":
       return { text: await agentFleetHealth(tier) };
+    case "kb-query": {
+      // Feature-flagged. If ENABLE_KB isn't "true", OR the KB call throws,
+      // fall through to general-query so Marco stays answerable while we
+      // iterate on the KB plumbing.
+      if (process.env.ENABLE_KB !== "true") {
+        console.info(
+          "[marco inbound] kb-query routed but ENABLE_KB!=true — falling through to general-query",
+        );
+        return { text: await generalQuery(q || "help", tier, ch) };
+      }
+      try {
+        return {
+          text: await kbQuery({
+            question: q,
+            tier,
+            channelId: ch,
+          }),
+        };
+      } catch (err) {
+        console.warn(
+          "[marco inbound] kb-query threw — falling through to general-query:",
+          err instanceof Error ? err.message : String(err),
+        );
+        return { text: await generalQuery(q || "help", tier, ch) };
+      }
+    }
     case "cash-position":
     case "find-in-vault":
       // These don't have dedicated wiring — fall through to the general query
       // which will search Monday and compose a natural answer.
       return { text: await generalQuery(q || routed.args.query || "cash position", tier, ch) };
+    case "general-query":
+      return { text: await generalQuery(q || "help", tier, ch) };
     case "clarify":
       if (!q) {
         return {

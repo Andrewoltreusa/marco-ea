@@ -51,8 +51,15 @@ describe("classifier", () => {
     expect(classifyIntent("what's the status of Rivertop").skill).toBe("deal-status");
   });
 
-  it("falls back to vault search", () => {
-    expect(classifyIntent("how do we handle custom colors").skill).toBe("find-in-vault");
+  it("routes how-to questions to kb-query", () => {
+    expect(classifyIntent("how do we handle custom colors").skill).toBe("kb-query");
+    expect(classifyIntent("how do I send a Sendblue follow-up").skill).toBe("kb-query");
+    expect(classifyIntent("what's our brand voice for church work").skill).toBe("kb-query");
+  });
+
+  it("falls back to vault search for non-process queries", () => {
+    // Use a phrase that doesn't match any process keyword.
+    expect(classifyIntent("random text about Alex").skill).toBe("find-in-vault");
   });
 });
 

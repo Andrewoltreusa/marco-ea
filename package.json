@@ -20,7 +20,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.80.0",
-    "@trigger.dev/sdk": "4.4.3",
+    "@trigger.dev/sdk": "4.4.4",
     "@upstash/redis": "^1.37.0"
   }
 }
