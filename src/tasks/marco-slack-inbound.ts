@@ -85,15 +85,45 @@ export const marcoSlackInbound = task({
         return { ok: true, tier: routed.tier, skill: "monday-update", ignored: "bad_tier" };
       }
       const requesterName = nameFor(payload.slackUserId) ?? "Unknown";
-      await tasks.trigger("comms/marco-monday-update-draft", {
-        rawText: payload.text,
-        requesterSlackId: payload.slackUserId,
-        requesterName,
-        requesterTier: routed.tier,
-        replyChannel: routed.replyChannel,
-        threadTs: routed.threadTs,
-      });
-      return { ok: true, tier: routed.tier, skill: "monday-update", delegated: true };
+      try {
+        const triggered = await tasks.trigger("comms/marco-monday-update-draft", {
+          rawText: payload.text,
+          requesterSlackId: payload.slackUserId,
+          requesterName,
+          requesterTier: routed.tier,
+          replyChannel: routed.replyChannel,
+          threadTs: routed.threadTs,
+        });
+        logger.info("monday-update delegated", {
+          user: payload.slackUserId,
+          runId: triggered.id,
+        });
+        return {
+          ok: true,
+          tier: routed.tier,
+          skill: "monday-update",
+          delegated: true,
+          childRunId: triggered.id,
+        };
+      } catch (err) {
+        // If we can't even enqueue the draft task, Marco MUST surface
+        // that instead of going silent. This covers Trigger.dev API
+        // outages, quota/auth errors, payload shape issues.
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.error("failed to enqueue monday-update-draft", { error: msg });
+        try {
+          await postMessage({
+            channel: routed.replyChannel,
+            text:
+              `I couldn't kick off the draft for that update — ${msg.slice(0, 200)}. ` +
+              `Try again in a moment, or log it manually on the Monday card.`,
+            thread_ts: routed.threadTs,
+          });
+        } catch {
+          // last-resort swallow
+        }
+        return { ok: false, tier: routed.tier, skill: "monday-update", error: msg };
+      }
     }
 
     let response: { text: string; blocks?: unknown[] };
