@@ -42,19 +42,21 @@ export interface WriteIntentParsed {
 
 const SYSTEM_PROMPT = `You parse natural-language Slack messages into Monday.com write intents for Oltre Castings & Design.
 
+INPUT MAY BE IN ENGLISH OR RUSSIAN (Alex Polkhovskiy and Alex Tretiakov speak Russian). Your OUTPUT — the "target" and "content" fields — MUST always be in English. Translate Russian content to clean, natural English before returning. Preserve proper nouns (names, deal codes) as-is.
+
 Your job: given a user's Slack message, return a JSON object with three fields:
 {
-  "target": "<person, company, or deal name the user is talking about>",
-  "content": "<the exact text to log as a Monday update, first-person, lightly cleaned>",
+  "target": "<person, company, or deal name the user is talking about — always in English/proper-noun form>",
+  "content": "<the exact text to log as a Monday update, first-person, lightly cleaned, translated to English if the input was Russian>",
   "confidence": <0.0–1.0 — how sure you are this is a write intent>
 }
 
 RULES:
 - If the user is clearly asking to log, note, update, add, or otherwise RECORD something in Monday, this is a write intent.
-- If the user is asking a QUESTION ("what's the status of X?", "when does X ship?"), confidence should be 0 or very low — it's not a write intent.
-- The target is usually a person's name or a company name. It is NEVER an internal ID. Just copy it out of the message.
-- The content should read naturally as a Monday update entry. Strip meta-phrases like "Hey Marco, can you make sure..." but keep the actual information. Convert "tomorrow at 11" to a relative phrase — the reader will know today's date.
-- If no date is mentioned but the message implies urgency ("meeting"), leave the date as the user said it ("tomorrow", "Friday", etc.). Don't invent dates.
+- If the user is asking a QUESTION ("what's the status of X?", "when does X ship?", "какой статус X?"), confidence should be 0 or very low — it's not a write intent.
+- The target is usually a person's name or a company name. It is NEVER an internal ID. Just copy it out of the message (English spelling for proper nouns — e.g. "Ребекка Брук" → "Rebecca Brooke" if unambiguous, otherwise keep the Cyrillic).
+- The content should read naturally as a Monday update entry IN ENGLISH. Strip meta-phrases like "Hey Marco, can you make sure..." / "Привет Марко, обнови...". Keep the actual information. Convert "tomorrow at 11" / "завтра в 11" to English.
+- If no date is mentioned but the message implies urgency ("meeting"), leave the date as the user said it ("tomorrow", "Friday"). Don't invent dates.
 - Do NOT include a signature — that gets appended server-side.
 - Return ONLY the JSON object, no prose, no code fences.
 
@@ -71,6 +73,12 @@ Output: {"target":"Schellenberg","content":"","confidence":0.0}
 
 Input: "Note that the Lemmon project is waiting on hearth size confirmation."
 Output: {"target":"Lemmon","content":"Waiting on hearth size confirmation.","confidence":0.88}
+
+Input (Russian): "Ребекка Брук только что позвонила по C-26079. Email у неё правильный, высоту надо изменить на 70 5/8 дюймов вместо 71,5. Обнови в Monday."
+Output: {"target":"C-26079","content":"Rebecca Brooke called. Email on file confirmed. Hearth height correction: 70 5/8 inches (previously 71.5).","confidence":0.95}
+
+Input (Russian): "Я встретился с Lynnette сегодня утром, она хочет двигаться вперёд."
+Output: {"target":"Lynnette","content":"Met with her this morning — she wants to move forward.","confidence":0.9}
 
 Input: "cash"
 Output: {"target":"","content":"","confidence":0.0}`;

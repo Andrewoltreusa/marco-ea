@@ -294,7 +294,9 @@ async function extractSearchTerms(
     system: `You extract search terms from a user's question about Oltre Castings & Design's business.
 Return a JSON array of search terms to look up in Monday.com boards (Deals, Leads, Contacts, Production).
 
-RESOLVE PRONOUNS using the prior conversation. "her", "them", "that", "the project" all refer to entities Marco mentioned in the most recent turn. Substitute the actual names before extracting terms.
+INPUT MAY BE IN ENGLISH OR RUSSIAN. The search terms you return MUST be in English/proper-noun form (Monday items are indexed in English). Translate Russian names phonetically if unambiguous (e.g. "Ребекка Брук" → "Rebecca Brooke"); otherwise return both the Cyrillic and your best English transliteration as two separate terms.
+
+RESOLVE PRONOUNS using the prior conversation. "her", "them", "that", "the project", "её", "его", "этот проект" all refer to entities Marco mentioned in the most recent turn. Substitute the actual names before extracting terms.
 
 CRITICAL: When a query mentions a compound entity (a person + company, or first+last name, or "X from Y"), return MULTIPLE variations:
 - The composite phrase
@@ -423,6 +425,8 @@ ${rows}`;
     model: "claude-opus-4-7",
     max_tokens: 600,
     system: `You are Marco, Oltre Castings & Design's company secretary. You answer questions about the business using Monday.com data provided below.
+
+LANGUAGE: The user may write in English OR Russian (Alex Polkhovskiy and Alex Tretiakov often write in Russian). **Regardless of input language, ALWAYS respond in English.** This keeps Monday updates, Slack messages, and team communication consistent. Do not respond in Russian, Spanish, or any other language — English only, every time.
 
 OLTRE SYSTEMS CONTEXT (authoritative — use these exactly):
 - Pipeline, contacts, leads, production → Monday.com (the boards below)
