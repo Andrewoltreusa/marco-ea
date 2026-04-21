@@ -52,6 +52,34 @@ export const marcoMondayUpdateDraft = task({
   id: "comms/marco-monday-update-draft",
   maxDuration: 60,
   run: async (payload: MondayUpdateDraftPayload) => {
+    try {
+      return await runDraft(payload);
+    } catch (err) {
+      // Catch-all so Marco never goes silent. If anything in the draft
+      // pipeline throws (Claude, Monday API, Redis, Slack), post a
+      // visible error message in the DM instead of letting the task
+      // fail silently with retries.
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.error("draft pipeline threw", { error: msg });
+      try {
+        await postMessage({
+          channel: payload.replyChannel,
+          text:
+            `I hit a snag drafting that update: ${msg.slice(0, 200)}. ` +
+            `Try rephrasing with the exact item name, or just tell me the deal code directly (e.g. "log on C26079: ...").`,
+          thread_ts: payload.threadTs,
+        });
+      } catch {
+        // if even postMessage fails, there's nothing more we can do;
+        // the logger.error above ensures the Trigger.dev run records it.
+      }
+      return { ok: false, reason: "draft_pipeline_error", error: msg };
+    }
+  },
+});
+
+async function runDraft(payload: MondayUpdateDraftPayload) {
+  {
     logger.info("monday-update draft request", {
       user: payload.requesterSlackId,
       tier: payload.requesterTier,
@@ -100,18 +128,27 @@ export const marcoMondayUpdateDraft = task({
     }
 
     // ─── Fuzzy search Monday ─────────────────────────────────
-    const candidates = await fuzzyFindItems(parsed.target, {
+    const rawCandidates = await fuzzyFindItems(parsed.target, {
       limit: 5,
       boards: [BOARDS.DEALS, BOARDS.LEADS, BOARDS.CONTACTS],
     });
-    logger.info("monday candidates", { count: candidates.length });
+    // Drop low-confidence partials — if no candidate scores >= 0.6
+    // we'd rather say "no match" than offer unrelated partial hits
+    // (e.g. query "Rebecca Brooke" → returning Brooke Bundy / Rebecca
+    // Fraser as "matches" is noise, not signal).
+    const candidates = rawCandidates.filter((c) => c.score >= 0.6);
+    logger.info("monday candidates", {
+      rawCount: rawCandidates.length,
+      filteredCount: candidates.length,
+      topScore: rawCandidates[0]?.score ?? 0,
+    });
 
     if (candidates.length === 0) {
       await postMessage({
         channel: payload.replyChannel,
         text:
           `I couldn't find *${parsed.target}* in Monday Deals, Leads, or Contacts. ` +
-          `Try the full company name, or tell me which board it's on.`,
+          `Try the full company name, or tell me which board it's on (e.g. "log on C26079: ...").`,
         thread_ts: payload.threadTs,
       });
       return { ok: true, reason: "no_match", target: parsed.target };
@@ -180,5 +217,5 @@ export const marcoMondayUpdateDraft = task({
     await storeDraft(draft);
 
     return { ok: true, draftStored: true, previewTs: posted.ts, itemName: top.name };
-  },
-});
+  }
+}
