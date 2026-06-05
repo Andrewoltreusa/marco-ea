@@ -95,6 +95,20 @@ interface DocFetchResult {
 }
 
 /**
+ * Blocks requested per page when reading a doc. Monday's `blocks` connection
+ * is paginated; the UNPAGINATED default returns only 25 blocks, which silently
+ * truncated the KB to its table of contents — Sections 2+ never loaded. We page
+ * through explicitly (see fetchAsDoc) until a short page signals the end.
+ */
+const DOC_BLOCKS_PAGE_SIZE = 100;
+
+/**
+ * Hard cap on pages so a misbehaving API can't loop us forever.
+ * 100 pages * 100 blocks = 10k blocks, comfortably above the real KB size.
+ */
+const DOC_BLOCKS_MAX_PAGES = 100;
+
+/**
  * Try fetching the KB as a Monday Doc. Returns null on any failure so
  * the caller can fall back to the long-text path.
  *
@@ -104,16 +118,20 @@ interface DocFetchResult {
  * field holding the rendered text). If the schema version Marco's key
  * is on doesn't support a field we ask for, the query errors and we
  * bail gracefully.
+ *
+ * The `blocks` connection is paged with Monday's standard `(page, limit)`
+ * args. Without them the API caps the response at 25 blocks; the real KB is
+ * 700+ blocks, so we loop until a page comes back shorter than the page size.
  */
 async function fetchAsDoc(docId: string): Promise<DocFetchResult | null> {
   try {
     const gql = `
-      query ($ids: [ID!]) {
+      query ($ids: [ID!], $page: Int!, $limit: Int!) {
         docs(ids: $ids) {
           id
           name
           updated_at
-          blocks {
+          blocks(page: $page, limit: $limit) {
             id
             type
             content
@@ -121,26 +139,51 @@ async function fetchAsDoc(docId: string): Promise<DocFetchResult | null> {
         }
       }
     `;
-    const data = await mondayGraphql<{
-      docs: Array<{
-        id: string;
-        name: string;
-        updated_at: string | null;
-        blocks: Array<{ id: string; type: string; content: string }>;
-      }>;
-    }>(gql, { ids: [docId] });
-
-    const doc = data.docs?.[0];
-    if (!doc) return null;
 
     const lines: string[] = [];
-    for (const block of doc.blocks ?? []) {
-      const rendered = renderDocBlock(block);
-      if (rendered) lines.push(rendered);
+    let updatedAt: string | null = null;
+    let sawDoc = false;
+
+    for (let page = 1; page <= DOC_BLOCKS_MAX_PAGES; page++) {
+      const data = await mondayGraphql<{
+        docs: Array<{
+          id: string;
+          name: string;
+          updated_at: string | null;
+          blocks: Array<{ id: string; type: string; content: string }>;
+        }>;
+      }>(gql, { ids: [docId], page, limit: DOC_BLOCKS_PAGE_SIZE });
+
+      const doc = data.docs?.[0];
+      if (!doc) {
+        // No doc on the very first page → not a doc id; let the caller fall
+        // back to the long-text path. On a later page it just means we've run
+        // past the end, so stop with whatever we have.
+        if (!sawDoc) return null;
+        break;
+      }
+      sawDoc = true;
+      if (updatedAt === null) updatedAt = doc.updated_at ?? null;
+
+      const blocks = doc.blocks ?? [];
+      for (const block of blocks) {
+        const rendered = renderDocBlock(block);
+        if (rendered) lines.push(rendered);
+      }
+
+      // A short (or empty) page means we've reached the last page.
+      if (blocks.length < DOC_BLOCKS_PAGE_SIZE) break;
+
+      if (page === DOC_BLOCKS_MAX_PAGES) {
+        console.warn(
+          `[marco kb] hit DOC_BLOCKS_MAX_PAGES (${DOC_BLOCKS_MAX_PAGES}) while paging KB blocks; the KB may be truncated.`,
+        );
+      }
     }
+
     const text = lines.join("\n\n").trim();
     if (!text) return null;
-    return { text, updatedAt: doc.updated_at ?? null };
+    return { text, updatedAt };
   } catch (err) {
     console.warn(
       "[marco kb] Monday Docs fetch failed, will try long-text fallback:",
