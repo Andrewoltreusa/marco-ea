@@ -47,6 +47,10 @@ const REJECT_EMOJIS = new Set(["x", "negative_squared_cross_mark", "no_entry", "
 export const marcoReactionHandler = task({
   id: "comms/marco-reaction-handler",
   maxDuration: 30,
+  // Never retry: a crash after createItemUpdate but before deleteDraft
+  // would re-run the whole task and double-post to Monday. The user can
+  // simply re-react if the handler dies before executing.
+  retry: { maxAttempts: 1 },
   run: async (payload: ReactionPayload) => {
     logger.info("reaction received", { ...payload });
 

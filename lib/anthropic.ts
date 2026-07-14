@@ -88,7 +88,11 @@ export async function parseWriteIntent(
 ): Promise<WriteIntentParsed & { _raw?: string }> {
   const client = anthropic();
   const res = await client.messages.create({
-    model: "claude-sonnet-4-6",
+    // Haiku-class: structured intent parsing with few-shot examples.
+    // Verified against the Russian examples above before the swap; the
+    // 0.65 confidence gate + draft-preview + human ✅ approval mean a
+    // marginal parse never reaches Monday unreviewed.
+    model: "claude-haiku-4-5",
     max_tokens: 300,
     system: SYSTEM_PROMPT,
     messages: [{ role: "user", content: userMessage }],

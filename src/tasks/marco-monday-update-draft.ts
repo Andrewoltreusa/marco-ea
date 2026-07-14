@@ -51,6 +51,10 @@ function shortName(full: string): string {
 export const marcoMondayUpdateDraft = task({
   id: "comms/marco-monday-update-draft",
   maxDuration: 60,
+  // Never retry: a retry would post a second preview DM (and a second
+  // Redis draft) for the same request. The in-task catch already tells
+  // the user when drafting fails.
+  retry: { maxAttempts: 1 },
   run: async (payload: MondayUpdateDraftPayload) => {
     try {
       return await runDraft(payload);

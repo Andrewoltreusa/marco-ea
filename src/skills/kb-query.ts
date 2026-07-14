@@ -122,8 +122,14 @@ export async function kbQuery(args: KbQueryArgs): Promise<string> {
       : "This is Tier 1 (Andrew) — full detail is fine.";
 
   const res = await client.messages.create({
-    model: "claude-opus-4-7",
+    // Sonnet-class replaces Opus: the KB context does the heavy lifting
+    // here, not raw model capability. Thinking explicitly OFF — Sonnet 5
+    // defaults to adaptive when omitted, which would eat the 800-token
+    // output budget. NOTE: the model swap invalidates the existing KB
+    // cache once (caches are per-model); it rebuilds on first call.
+    model: "claude-sonnet-5",
     max_tokens: 800,
+    thinking: { type: "disabled" },
     system: [
       // Stable persona — cacheable prefix shared with future skills.
       { type: "text", text: MARCO_PERSONA },

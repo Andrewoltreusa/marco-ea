@@ -94,8 +94,23 @@ export async function fuzzyFindItems(
   query: string,
   opts: { limit?: number; boards?: string[] } = {},
 ): Promise<MondayItem[]> {
+  const byTerm = await fuzzyFindItemsMulti([query], opts);
+  return byTerm.get(query) ?? [];
+}
+
+/**
+ * Multi-term variant: fetches each board ONCE and scores every term
+ * against the same item list. N terms cost 1 Monday round-trip instead
+ * of N full board dumps — this was general-query's biggest latency tax.
+ */
+export async function fuzzyFindItemsMulti(
+  terms: string[],
+  opts: { limit?: number; boards?: string[] } = {},
+): Promise<Map<string, MondayItem[]>> {
   const limit = opts.limit ?? 5;
   const boards = opts.boards ?? [BOARDS.DEALS, BOARDS.LEADS, BOARDS.CONTACTS];
+  const out = new Map<string, MondayItem[]>();
+  if (terms.length === 0) return out;
 
   // Monday supports items_page with query_params.rules for text filtering,
   // but the simplest path for fuzzy "contains" is to pull recent items and
@@ -122,27 +137,30 @@ export async function fuzzyFindItems(
     }>;
   }>(gql, { boardIds: boards });
 
-  const q = query.trim().toLowerCase();
-  const qTokens = q.split(/\s+/).filter(Boolean);
+  for (const term of terms) {
+    const q = term.trim().toLowerCase();
+    const qTokens = q.split(/\s+/).filter(Boolean);
 
-  const candidates: MondayItem[] = [];
-  for (const board of data.boards) {
-    for (const item of board.items_page.items) {
-      const name = item.name.toLowerCase();
-      const score = scoreMatch(name, q, qTokens);
-      if (score > 0) {
-        candidates.push({
-          id: item.id,
-          name: item.name,
-          boardId: board.id,
-          boardName: board.name,
-          score,
-        });
+    const candidates: MondayItem[] = [];
+    for (const board of data.boards) {
+      for (const item of board.items_page.items) {
+        const name = item.name.toLowerCase();
+        const score = scoreMatch(name, q, qTokens);
+        if (score > 0) {
+          candidates.push({
+            id: item.id,
+            name: item.name,
+            boardId: board.id,
+            boardName: board.name,
+            score,
+          });
+        }
       }
     }
+    candidates.sort((a, b) => b.score - a.score);
+    out.set(term, candidates.slice(0, limit));
   }
-  candidates.sort((a, b) => b.score - a.score);
-  return candidates.slice(0, limit);
+  return out;
 }
 
 /**

@@ -49,7 +49,12 @@ export interface NormalizedSlackEvent {
 
 export const marcoSlackInbound = task({
   id: "comms/marco-slack-inbound",
-  maxDuration: 60,
+  // 120s: heavy financial/KB queries could breach the old 60s cap and
+  // trigger platform retries. maxAttempts 1 because a retry re-runs the
+  // whole pipeline and can double-post — the in-code never-silent catch
+  // already turns failures into an error reply.
+  maxDuration: 120,
+  retry: { maxAttempts: 1 },
   run: async (payload: NormalizedSlackEvent & { __probe?: boolean }) => {
     // Diagnostic probe — the Vercel route GET handler uses this to verify
     // end-to-end trigger plumbing without producing any Slack side-effects.
