@@ -25,7 +25,7 @@ import { task, logger, tasks } from "@trigger.dev/sdk";
 import { routeInbound, type RoutedRequest } from "../slack/router.js";
 import { nameFor, type Tier } from "../slack/allowlist.js";
 import { postMessage, addReaction, swapReaction } from "../../lib/slack.js";
-import { claimEvent } from "../../lib/redis.js";
+import { claimEvent, redis } from "../../lib/redis.js";
 import { dealStatus } from "../skills/deal-status.js";
 import { productionEta } from "../skills/production-eta.js";
 import { leadCheck } from "../skills/lead-check.js";
@@ -291,12 +291,24 @@ async function logAccessDenial(
   payload: NormalizedSlackEvent,
   routed: RoutedRequest,
 ): Promise<void> {
-  logger.warn("access-denial", {
+  const entry = {
     ts: new Date().toISOString(),
     slackUserId: payload.slackUserId,
     channel: routed.replyChannel,
     text: payload.text.slice(0, 200),
     rateLimited: routed.rateLimited ?? false,
-  });
-  // Phase-6b: also append to memory/access-denials.md via Upstash Redis.
+  };
+  logger.warn("access-denial", entry);
+  // Durable audit trail (closes the Phase-6b TODO). Redis, not a local
+  // file — Trigger.dev cloud's filesystem is ephemeral. Newest first,
+  // capped at 500 entries. Read back: LRANGE marco:log:access-denials 0 -1
+  try {
+    const r = redis();
+    await r.lpush("marco:log:access-denials", JSON.stringify(entry));
+    await r.ltrim("marco:log:access-denials", 0, 499);
+  } catch (err) {
+    logger.warn("access-denial redis log failed", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }

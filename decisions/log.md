@@ -4,6 +4,26 @@ Append-only record of architectural and trust decisions. Every entry: date, deci
 
 ---
 
+## 2026-07-14 — Await-the-trigger fix, Redis-not-files, model tiering, broadcast implementation
+
+**Decision (root-cause fix):** The Vercel webhook must `await` every `tasks.trigger()` call. The fire-and-forget pattern froze the un-sent HTTP call with the lambda when the response returned — the root cause of Marco's "30-minute or never" replies (verified live: a 17:12Z DM produced its Trigger.dev run at 17:25:25Z, 2ms after a diagnostic GET thawed the instance). All three trigger sites now awaited with `idempotencyKey` (15m TTL); enqueue failures notify the user via `after()`; reaction events are filtered to draft-approval emojis route-side.
+
+**Decision (UX):** Marco acks every Tier-1/2 DM/mention with 👀 within ~2-3s (task start), swapping to ✅ on answer, ⚠️ on error, 📝 when a draft preview is coming. Tier-3 messages are never reacted to.
+
+**Decision (runtime state):** All runtime artifacts live in Upstash Redis, never local files — Trigger.dev cloud's filesystem is ephemeral, which is why `memory/` and `deliverables/` stayed empty for three months. Keys: `marco:deliverable:*` (30d TTL), `marco:log:access-denials` / `marco:log:write-incidents` (LPUSH, cap 500), `marco:prodalert:*` (24h dedup), `marco:evt:*` (15m inbound dedup).
+
+**Decision (models):** Tiered — `claude-haiku-4-5` for extraction/intent parsing (Russian spot-check passed before the swap), `claude-sonnet-5` with thinking explicitly disabled for composition/KB/brief, Opus-class reserved for future SWOT/rollup synthesis. Voice is load-bearing: any future model change must re-run the Russian write-intent spot-check and a tone check.
+
+**Decision (retries):** `maxAttempts: 1` on inbound/reaction/draft tasks — platform retries risk double-posts/double-writes; the in-code never-silent catches own error surfacing. Scheduled tasks keep the global default except production-alert (spec forbids in-slot retries).
+
+**Decision (broadcasts):** `comms/marco-production-alert` and `comms/marco-team-morning-brief` implemented as Trigger.dev cron tasks, deployed with `DRY_RUN=1` (Andrew previews via DM). Flip `DRY_RUN=0` in the Trigger.dev prod env after a clean preview cycle; morning brief also needs `MARCO_OFFICE_CHANNEL_ID` set once Marco is invited to #oltre-office.
+
+**Decision (research verdicts, from the 2026-07-14 research round):** Keep building Marco rather than buying Viktor (no per-user tiers, no Monday support, unpredictable credit costs; Marco is Uplift AI's reference architecture). Do NOT move the KB to Notion — cache-first Redis makes source latency irrelevant; humans edit in Monday, Marco reads from cache. No replatform off Vercel+Trigger.dev — adopt Slack's native AI-app primitives (assistant pane, streaming, Block Kit approval buttons) in a follow-up phase.
+
+**Rationale:** See the plan + verification evidence in the 2026-07-14 session; latency went from 13+ minutes (or never) to 3-12s end-to-end, verified against production with signed synthetic events.
+
+---
+
 ## 2026-04-17 — FreshBooks removed, Monday AR 2026 is source of truth for cash/AR
 
 **Decision:** Marco no longer references FreshBooks (or Xero, QuickBooks) in any answer. The Monday AR 2026 board (`18393591112`) is the single authoritative source for all financial questions: cash position, AR, contracted amounts, invoiced amounts, payments, remaining balance.

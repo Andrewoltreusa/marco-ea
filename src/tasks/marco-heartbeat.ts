@@ -8,7 +8,7 @@
  *
  * The actual team-morning-brief task (7:30 AM) consumes the draft and posts.
  *
- * Project: proj_rfghiguuzwfekcixcuux (shared)
+ * Project: proj_nvpgdhytpkikscybodkk (Marco's own — split 2026-04-24)
  *
  * Why Trigger.dev and not /loop: the decision log
  * (decisions/log.md, 2026-04-15) aligns Marco with the Q16 cron

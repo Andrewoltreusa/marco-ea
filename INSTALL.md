@@ -12,7 +12,7 @@ Marco is a Slack app + a set of Trigger.dev tasks. This doc covers the manual st
 
 ## Prerequisites
 - Admin on the Oltre HQ Slack workspace
-- Access to the Trigger.dev project `proj_rfghiguuzwfekcixcuux`
+- Access to Marco's own Trigger.dev project `proj_nvpgdhytpkikscybodkk` (split from the shared project 2026-04-24)
 - `oltre-agents/.env` available locally (Marco reads creds from there)
 
 ---
@@ -62,7 +62,7 @@ Under **Event Subscriptions** → **Enable Events**:
 
 ## Step 4 — Add Marco's env vars to Trigger.dev
 
-In the Trigger.dev dashboard for project `proj_rfghiguuzwfekcixcuux`, open **Environment Variables** and add:
+In the Trigger.dev dashboard for project `proj_nvpgdhytpkikscybodkk` (Production env), open **Environment Variables** and add:
 
 ```
 MARCO_SLACK_BOT_TOKEN=xoxb-...
@@ -70,7 +70,7 @@ MARCO_SLACK_SIGNING_SECRET=...
 MARCO_SLACK_APP_ID=A...
 ```
 
-The Monday, FreshBooks, and Anthropic keys are already present from the oltre-agents deploy — Marco reuses them at read scope.
+The Monday and Anthropic keys must be set in Marco's OWN Trigger.dev project (proj_nvpgdhytpkikscybodkk, Production env) — Marco no longer shares the oltre-agents project (split 2026-04-24). FreshBooks was removed 2026-04-17.
 
 ---
 
@@ -82,7 +82,7 @@ From this repo:
 bun install        # or: npm install
 bun run typecheck  # sanity check
 bun test           # runs router + allowlist unit tests — MUST pass
-npx trigger.dev@latest deploy --project-ref proj_rfghiguuzwfekcixcuux
+npx trigger.dev@latest deploy   # trigger.config.ts pins proj_nvpgdhytpkikscybodkk
 ```
 
 The deploy registers two tasks:
@@ -124,7 +124,7 @@ Do NOT invite Marco to:
 3. **Tier 3 test:** ask someone outside the allowlist to DM Marco. Expected: the polite refusal message, logged to `memory/access-denials.md`.
 4. **Scheduled test:** set `DRY_RUN=1` and manually trigger `comms/marco-team-morning-brief` from the Trigger.dev dashboard. Expected: a draft in `deliverables/` and a preview DM to Andrew. No post to `#oltre-office`.
 
-If all four pass, Marco is live at Level 1 (Read & Report).
+If all four pass, Marco is live (currently Level 2 — Draft & Wait; see decisions/2026-04-15-phase-6a-level-2.md).
 
 ---
 

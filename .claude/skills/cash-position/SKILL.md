@@ -1,6 +1,6 @@
 ---
 name: cash-position
-description: Answer "how much AR is out?" / "who owes us the most?" / "what's cash at?". Pulls from FreshBooks + Monday AR 2026 board. Tier 1 gets full detail; Tier 2 gets AR top 5 without account-level financial drilldown. Read-only.
+description: Answer "how much AR is out?" / "who owes us the most?" / "what's cash at?". Pulls from the Monday AR 2026 board (FreshBooks removed 2026-04-17). NOTE: at runtime this skill is folded into general-query, which injects code-computed AR aggregates. Tier 1 gets full detail; Tier 2 gets AR top 5 without account-level financial drilldown. Read-only.
 ---
 
 # cash-position
@@ -12,7 +12,7 @@ description: Answer "how much AR is out?" / "who owes us the most?" / "what's ca
 - "what's [client] owe"
 
 ## Data sources
-- **FreshBooks** — `GET /accounting/account/{accountId}/invoices/invoices` filtered by status `outstanding`. Refresh access token using `FRESHBOOKS_REFRESH_TOKEN` from `oltre-agents/.env`.
+- **Monday AR 2026 board `18393591112`** — Contract $, Payment #1/#2, Remaining Balance; aggregates pre-computed in code (lib/ar.ts).
 - **Monday AR 2026** board `18393591112` — items, amount column, aging column.
 
 ## Output format
@@ -24,7 +24,7 @@ Top 5:
  1. [Client] — $X,XXX — X days aged
  2. ...
 Aged >60 days: $X,XXX (N invoices).
-Sources: FreshBooks + Monday AR 2026.
+Sources: Monday AR 2026.
 ```
 
 ### Tier 2 (Bella, Alex T., Alex P.)
@@ -41,6 +41,6 @@ Same top 5 list, but omit the "aged >60 days" total if the requester is Bella or
 | Cash balance | ❌ (not in scope) | ❌ | ❌ |
 
 ## Guardrails
-- Never include FreshBooks internal IDs or URLs with tokens.
-- Never answer "what's cash balance?" — that's not in Marco's read surface. Respond: "Cash balance isn't on my read list. Ask Andrew or check FreshBooks directly."
-- Cache the top-5 result for 15 minutes to avoid hammering FreshBooks.
+- Never include raw API URLs or tokens.
+- Never answer "what's cash balance?" — that's not in Marco's read surface. Respond: "Bank cash balance isn't on my read list — I can give you AR outstanding from Monday. Ask Andrew for bank balances."
+- Cache the top-5 result for 15 minutes to avoid hammering the Monday API.

@@ -49,8 +49,8 @@ Memory is for cross-session continuity. It is NOT the place to duplicate vault c
 
 ## Tool posture
 
-- **Read tools (always allowed):** filesystem read of allowed vault paths, Monday API GET, dashboard GET, FreshBooks GET, Slack read for channels I'm invited to.
-- **Write tools (Level 1 — current):** only `memory/`, `projects/drafts/`, `deliverables/`, `decisions/`. Nothing else.
+- **Read tools (always allowed):** filesystem read of allowed vault paths, Monday API GET, dashboard GET, Slack read for channels I'm invited to. (FreshBooks removed 2026-04-17.)
+- **Write tools (Level 2 — current):** Monday `create_update` on Deals/Leads/Contacts via the draft + approval flow; repo `decisions/` entries. Runtime state goes to Upstash Redis (`marco:*` keys), not local folders.
 - **Write tools (Level 2 — future):** additionally, Slack `chat:write` gated on ✅ reaction confirmation from Andrew on a draft in `projects/drafts/`.
 - **Write tools (Level 3 — future, deferred):** pre-approved action types only. Current list: empty. Promotion requires a written decision in `decisions/`.
 

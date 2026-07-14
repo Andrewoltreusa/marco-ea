@@ -1,8 +1,10 @@
 # Marco — STATUS.md (pickup doc)
 
-Last updated: **2026-04-21**. Read this first if you're picking up Marco development.
+Last updated: **2026-07-14**. Read this first if you're picking up Marco development.
 
 The three identity files ([SOUL.md](SOUL.md) / [COMPANY.md](COMPANY.md) / [AGENTS.md](AGENTS.md)) say who Marco is. This file says **what's built, what works, what's next, and where to look when something breaks**.
+
+> **2026-07-14 — the "30-minute Marco" root cause was found and fixed.** The Vercel webhook fired `tasks.trigger()` without awaiting it; Vercel freezes the lambda when the response is sent, so triggers sat frozen until a later request thawed the instance (or were lost). All trigger sites are now awaited with idempotency keys; Marco acks with 👀 in ~2-3s and answers in ~3-12s. Also that day: model tiering (Haiku 4.5 extraction / Sonnet 5 composition), parallelized Monday fan-out, Redis event dedup, production-alert + morning-brief scheduled tasks implemented (DRY_RUN=1), audit logs to Redis. Sections below this banner may predate all of that — trust the banner and git log over stale prose.
 
 ---
 
@@ -10,12 +12,11 @@ The three identity files ([SOUL.md](SOUL.md) / [COMPANY.md](COMPANY.md) / [AGENT
 
 | | |
 |---|---|
-| Trigger.dev staging | `v20260421.3` |
-| Trigger.dev prod | **not yet promoted** — staging only |
-| GitHub `main` | commit `d7ec542` |
-| Trigger.dev project | `proj_rfghiguuzwfekcixcuux` (shared with oltre-agents) |
-| Slack app | `A0ASRRXM7MM` in Oltre HQ |
-| Vercel route | `https://oltre-dashboard.vercel.app/api/marco/slack` |
+| Trigger.dev prod | live — check current version via runs API (`version` field); `20260714.x` series as of 2026-07-14 |
+| Trigger.dev project | `proj_nvpgdhytpkikscybodkk` (Marco's OWN — split from oltre-agents 2026-04-24) |
+| Slack app | `A0ASRRXM7MM` in Oltre HQ (bot user `U0ATL76PG9F`) |
+| Vercel route | `https://oltre-dashboard.vercel.app/api/marco/slack` (GET = diagnostic probe) |
+| Deploy command | `npx trigger.dev deploy` — **a merged commit does nothing until deployed** |
 
 ## What works today (verified in staging)
 

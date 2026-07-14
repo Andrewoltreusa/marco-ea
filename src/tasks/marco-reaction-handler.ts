@@ -20,7 +20,25 @@ import { task, logger } from "@trigger.dev/sdk";
 import { tierFor } from "../slack/allowlist.js";
 import { createItemUpdate } from "../../lib/monday.js";
 import { postMessage } from "../../lib/slack.js";
-import { getDraft, deleteDraft } from "../../lib/redis.js";
+import { getDraft, deleteDraft, redis } from "../../lib/redis.js";
+
+/**
+ * Durable write audit trail — every executed or failed Monday write,
+ * newest first, capped at 500. Read back:
+ *   LRANGE marco:log:write-incidents 0 -1
+ */
+async function logWriteIncident(entry: Record<string, unknown>): Promise<void> {
+  try {
+    const r = redis();
+    await r.lpush(
+      "marco:log:write-incidents",
+      JSON.stringify({ ts: new Date().toISOString(), ...entry }),
+    );
+    await r.ltrim("marco:log:write-incidents", 0, 499);
+  } catch {
+    // audit log must never break the write path
+  }
+}
 
 export interface ReactionPayload {
   /** The user who reacted. */
@@ -133,10 +151,28 @@ export const marcoReactionHandler = task({
         thread_ts: draft.previewTs,
       });
       await deleteDraft(draft.previewTs);
+      await logWriteIncident({
+        outcome: "posted",
+        approvedBy: payload.reactorSlackId,
+        requester: draft.requesterSlackId,
+        tier: draft.requesterTier,
+        board: result.boardName,
+        item: result.itemName,
+        updateId: result.updateId,
+      });
       return { ok: true, posted: true, updateId: result.updateId };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       logger.error("monday create_update failed", { err: msg });
+      await logWriteIncident({
+        outcome: "failed",
+        approvedBy: payload.reactorSlackId,
+        requester: draft.requesterSlackId,
+        tier: draft.requesterTier,
+        board: draft.monday.boardName,
+        item: draft.monday.itemName,
+        error: msg.slice(0, 300),
+      });
       await postMessage({
         channel: draft.previewChannel,
         text: `Failed to post the update: ${msg}`,

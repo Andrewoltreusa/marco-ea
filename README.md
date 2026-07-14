@@ -7,13 +7,13 @@ Marco is a Slack app that answers the "what's the status of X?" questions the Ol
 ## What Marco is
 - A separate Slack app in the Oltre HQ workspace (not the existing `U0ALQ669ATB` automation bot)
 - A set of Trigger.dev tasks: one inbound webhook, one overnight heartbeat, four scheduled broadcasts
-- Read-only: Oltre Vault, Monday.com, Oltre Dashboard, FreshBooks
+- Read-only: Oltre Vault, Monday.com, Oltre Dashboard (FreshBooks removed 2026-04-17; Monday writes limited to Level-2 create_update on Deals/Leads/Contacts via draft + approval)
 - Tier-gated: Andrew is Tier 1 (commands), Bella/Alex T./Alex P. are Tier 2 (read-only queries), everyone else is Tier 3 (silent refusal)
 
 ## What Marco isn't
 - Not Andrew's personal EA — doesn't see his calendar, inbox, or personal tasks
 - Not the Oltre HQ automation bot — separate identity, separate token
-- Not a write system — v1 is frozen at trust Level 1 (Read & Report) for a minimum of 2 weeks
+- Writes are limited to Level 2 (Draft & Wait): Monday `create_update` on Deals/Leads/Contacts via draft + approval (decisions/2026-04-15-phase-6a-level-2.md)
 
 ## Identity files
 - [SOUL.md](SOUL.md) — who Marco is
@@ -52,7 +52,7 @@ See [INSTALL.md](INSTALL.md).
 | 4 — Company interview | ✅ [decisions/2026-04-15-company-interview.md](decisions/2026-04-15-company-interview.md) |
 | 5 — Scheduled workflows | ✅ 4 skills scaffolded, DRY_RUN gated |
 | 6 — Query skills | ✅ 6 skills scaffolded; implementations stubbed |
-| 7 — Trust ladder | ✅ Level 1, AFK async-with-catch-up documented |
+| 7 — Trust ladder | ✅ Level 2 (Draft & Wait) since 2026-04-15 |
 | 8 — Slack app wiring | 🟡 Code scaffolded, manual install pending (see INSTALL.md) |
 | 9 — Overnight heartbeat | ✅ Cron task scaffolded |
 
