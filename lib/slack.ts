@@ -69,6 +69,37 @@ export async function addReaction(
   return call("reactions.add", { channel, timestamp, name });
 }
 
+export async function removeReaction(
+  channel: string,
+  timestamp: string,
+  name: string,
+) {
+  return call("reactions.remove", { channel, timestamp, name });
+}
+
+/**
+ * Best-effort swap of Marco's ack reaction (👀) for a final-state emoji
+ * (✅ done / ⚠️ error / 📝 draft pending). Reaction failures must never
+ * fail the run — the reply text is the real deliverable.
+ */
+export async function swapReaction(
+  channel: string,
+  timestamp: string,
+  from: string,
+  to: string,
+): Promise<void> {
+  try {
+    await removeReaction(channel, timestamp, from);
+  } catch {
+    // 👀 may already be gone (or was never added) — fine.
+  }
+  try {
+    await addReaction(channel, timestamp, to);
+  } catch {
+    // no_reaction / already_reacted — fine.
+  }
+}
+
 export async function getUserInfo(userId: string) {
   return call<{ user: { id: string; name: string; real_name: string; is_bot: boolean } }>(
     "users.info",

@@ -31,6 +31,20 @@ export function redis(): Redis {
 }
 
 // ─────────────────────────────────────────────────────────────
+// Inbound event dedup
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Claim a Slack event delivery. Returns true exactly once per key —
+ * duplicate deliveries (Slack retries, double triggers) return false.
+ * 15-minute window matches Slack's retry ladder with room to spare.
+ */
+export async function claimEvent(key: string): Promise<boolean> {
+  const res = await redis().set(key, "1", { nx: true, ex: 900 });
+  return res === "OK";
+}
+
+// ─────────────────────────────────────────────────────────────
 // Draft storage
 // ─────────────────────────────────────────────────────────────
 

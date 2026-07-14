@@ -15,14 +15,17 @@
  * back to Slack via lib/slack.ts. Slack already received its 200
  * from the Vercel route within ~50ms.
  *
- * Project: proj_rfghiguuzwfekcixcuux (shared with oltre-agents)
- * Env: MARCO_SLACK_BOT_TOKEN (and all shared vars from oltre-agents)
+ * Project: proj_nvpgdhytpkikscybodkk (Marco's own — split from the shared
+ * oltre-agents project on 2026-04-24)
+ * Env: MARCO_SLACK_BOT_TOKEN + Marco-specific vars set in the Trigger.dev
+ * Marco project (Production env)
  */
 
 import { task, logger, tasks } from "@trigger.dev/sdk";
 import { routeInbound, type RoutedRequest } from "../slack/router.js";
 import { nameFor, type Tier } from "../slack/allowlist.js";
-import { postMessage } from "../../lib/slack.js";
+import { postMessage, addReaction, swapReaction } from "../../lib/slack.js";
+import { claimEvent } from "../../lib/redis.js";
 import { dealStatus } from "../skills/deal-status.js";
 import { productionEta } from "../skills/production-eta.js";
 import { leadCheck } from "../skills/lead-check.js";
@@ -38,6 +41,10 @@ export interface NormalizedSlackEvent {
   threadTs?: string;
   isDM: boolean;
   teamId?: string;
+  /** Slack ts of the triggering message — enables the 👀 ack + dedup. Optional: older route deploys don't send it. */
+  eventTs?: string;
+  /** Slack event_id from the events envelope — preferred dedup key. */
+  eventId?: string;
 }
 
 export const marcoSlackInbound = task({
@@ -49,6 +56,21 @@ export const marcoSlackInbound = task({
     if (payload.__probe === true) {
       logger.info("probe received", { ts: new Date().toISOString() });
       return { ok: true, probe: true, deploy: process.env.TRIGGER_DEPLOY_VERSION ?? "unknown" };
+    }
+
+    // ─── Duplicate-delivery guard ─────────────────────────────
+    // Slack retries events (~1min/5min) whenever the webhook breaches its
+    // 3s ack window. The route also passes a trigger-level idempotencyKey,
+    // but Redis is the backstop: first delivery wins, duplicates exit here.
+    const evtKey =
+      payload.eventId ??
+      (payload.eventTs ? `${payload.channel}:${payload.eventTs}` : null);
+    if (evtKey) {
+      const first = await claimEvent(`marco:evt:${evtKey}`);
+      if (!first) {
+        logger.info("duplicate delivery ignored", { evtKey });
+        return { ok: true, deduped: true };
+      }
     }
 
     logger.info("marco slack inbound", {
@@ -79,6 +101,21 @@ export const marcoSlackInbound = task({
       return { ok: true, tier: 3, posted: !routed.rateLimited };
     }
 
+    // ─── Instant ack — 👀 lands within ~2-3s of the message ──
+    // Tier 1/2 only (never engage Tier-3 messages), and only for events
+    // that carry the original message ts (slash commands get an ephemeral
+    // ack from the Vercel route instead).
+    const canReact = payload.source !== "slash_command" && !!payload.eventTs;
+    if (canReact) {
+      try {
+        await addReaction(payload.channel, payload.eventTs!, "eyes");
+      } catch (err) {
+        logger.warn("ack reaction failed", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
     // ─── Phase 6a: write intent → draft task ─────────────────
     if (routed.skill === "monday-update") {
       if (routed.tier !== 1 && routed.tier !== 2) {
@@ -98,6 +135,11 @@ export const marcoSlackInbound = task({
           user: payload.slackUserId,
           runId: triggered.id,
         });
+        // 📝 = "drafting" — the preview DM is the real feedback; ✅ would
+        // wrongly signal the update already posted.
+        if (canReact) {
+          await swapReaction(payload.channel, payload.eventTs!, "eyes", "memo");
+        }
         return {
           ok: true,
           tier: routed.tier,
@@ -122,15 +164,20 @@ export const marcoSlackInbound = task({
         } catch {
           // last-resort swallow
         }
+        if (canReact) {
+          await swapReaction(payload.channel, payload.eventTs!, "eyes", "warning");
+        }
         return { ok: false, tier: routed.tier, skill: "monday-update", error: msg };
       }
     }
 
     let response: { text: string; blocks?: unknown[] };
+    let hadError = false;
     try {
       response = await runSkill(routed);
     } catch (err) {
       // Catch all — Marco must NEVER go silent on Tier 1/2 users.
+      hadError = true;
       const msg = err instanceof Error ? err.message : String(err);
       logger.error("skill failed", { skill: routed.skill, error: msg });
       response = {
@@ -150,6 +197,15 @@ export const marcoSlackInbound = task({
       blocks: response.blocks,
       thread_ts: routed.threadTs,
     });
+
+    if (canReact) {
+      await swapReaction(
+        payload.channel,
+        payload.eventTs!,
+        "eyes",
+        hadError ? "warning" : "white_check_mark",
+      );
+    }
 
     return { ok: true, tier: routed.tier, skill: routed.skill };
   },

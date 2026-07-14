@@ -30,9 +30,12 @@ describe("allowlist", () => {
 });
 
 describe("classifier", () => {
-  it("routes cash questions", () => {
-    expect(classifyIntent("what's AR at").skill).toBe("cash-position");
-    expect(classifyIntent("who owes us the most?").skill).toBe("cash-position");
+  it("routes cash questions to general-query (AR 2026 board dump)", () => {
+    // Cash/AR routes to general-query on purpose — it injects the AR 2026
+    // aggregates. The standalone cash-position skill was folded into
+    // general-query when FreshBooks was removed (decisions/log.md 2026-04-17).
+    expect(classifyIntent("what's AR at").skill).toBe("general-query");
+    expect(classifyIntent("who owes us the most?").skill).toBe("general-query");
   });
 
   it("routes production ETA", () => {
@@ -98,7 +101,7 @@ describe("router tier gating", () => {
       text: "cash",
       isDM: true,
     });
-    expect(r.skill).toBe("cash-position");
+    expect(r.skill).toBe("general-query");
     expect(r.tier).toBe(1);
   });
 
