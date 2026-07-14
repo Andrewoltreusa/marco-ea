@@ -11,6 +11,7 @@
 import {
   fuzzyFindItems,
   getItemWithColumns,
+  getLinkedItems,
   BOARDS,
   type ItemWithColumns,
 } from "../../lib/monday.js";
@@ -38,12 +39,45 @@ export async function dealStatus(
     if (contactCandidates.length > 0 && contactCandidates[0].score > 0.3) {
       const contact = await getItemWithColumns(contactCandidates[0].id);
       if (contact) {
+        // Deals are named by code (C26100), so a person's name never
+        // fuzzy-matches them — follow the contact's board-relation links
+        // instead. This is how "Kevin Stone" resolves to his 3 deals.
+        const linkedDeals = (await getLinkedItems(contact.id).catch(() => []))
+          .filter((l) => l.boardId === BOARDS.DEALS)
+          .slice(0, 5);
+
+        if (linkedDeals.length > 0) {
+          const hydrated = await Promise.all(
+            linkedDeals.map((l) =>
+              getItemWithColumns(l.id).catch(() => null),
+            ),
+          );
+          const lines = hydrated
+            .filter((d): d is ItemWithColumns => d !== null)
+            .map((d) => {
+              const stage = d.columns["Stage"] ?? "unknown";
+              const value = d.columns["Deal Value"] ?? "";
+              const close = d.columns["Close Date"] ?? "";
+              return (
+                `• *${d.name}* — stage *${stage}*` +
+                (value && tier === 1 ? `, $${value}` : "") +
+                (close ? `, close ${close}` : "") +
+                ` — <${d.url}|View>`
+              );
+            });
+          return (
+            `*${contact.name}* (Contacts) has ${lines.length} linked deal${lines.length === 1 ? "" : "s"}:\n` +
+            lines.join("\n") +
+            `\n_Source: Monday Contacts → Deals relation • <${contact.url}|Contact>_`
+          );
+        }
+
         const dealStatus = contact.columns["Deal Status"] ?? "unknown";
         const account = contact.columns["Account"] ?? "";
         return (
           `*${contact.name}* is in Contacts${account ? ` (${account})` : ""}` +
           `, deal status *${dealStatus}*.` +
-          ` I don't see a matching deal in the Deals board — they may not have one yet.\n` +
+          ` I don't see any deal linked to them — they may not have one yet.\n` +
           `_Source: Monday Contacts • <${contact.url}|View>_`
         );
       }

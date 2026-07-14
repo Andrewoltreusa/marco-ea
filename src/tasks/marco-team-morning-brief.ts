@@ -29,25 +29,9 @@ import { MARCO_PERSONA } from "../../lib/marco-persona.js";
 
 const ANDREW = "U04D9BPK8H2";
 
-interface DashboardState {
-  currentFocus?: string;
-  priorities?: string[];
-  completedToday?: string[];
-}
-
-async function getDashboardState(): Promise<DashboardState | null> {
-  const token = process.env.OLTRE_DASHBOARD_API_TOKEN;
-  if (!token) return null;
-  try {
-    const res = await fetch("https://oltre-dashboard.vercel.app/api/state", {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) return null;
-    return (await res.json()) as DashboardState;
-  } catch {
-    return null;
-  }
-}
+// NOTE 2026-07-14: the dashboard /api/state "Today's focus" section was
+// removed on Andrew's instruction — its currentFocus data was stale and
+// inaccurate. The brief is Monday-boards-only now.
 
 const FLAGGED_STATUS = /\b(red|blocked?|delay(ed)?|stuck|on hold)\b/i;
 
@@ -92,12 +76,11 @@ export const marcoTeamMorningBrief = schedules.task({
     const dryRun = process.env.DRY_RUN !== "0";
     const today = new Date().toISOString().slice(0, 10);
 
-    // All four sources in parallel; each failure degrades gracefully.
-    const [deals, ar, ocd, dashboard] = await Promise.all([
+    // All three boards in parallel; each failure degrades gracefully.
+    const [deals, ar, ocd] = await Promise.all([
       getBoardItems(BOARDS.DEALS, { limit: 500 }).catch(() => null),
       getBoardItems(BOARDS.AR_2026, { limit: 500 }).catch(() => null),
       getBoardItems(BOARDS.OCD_SCHEDULE, { limit: 500 }).catch(() => null),
-      getDashboardState(),
     ]);
 
     // Pre-compute every number in code — Claude only writes prose.
@@ -134,16 +117,6 @@ export const marcoTeamMorningBrief = schedules.task({
       facts.push("PRODUCTION: Monday unreachable.");
     }
 
-    if (dashboard) {
-      if (dashboard.currentFocus) facts.push(`TODAY'S FOCUS (Andrew): ${dashboard.currentFocus}`);
-      if (dashboard.priorities?.length)
-        facts.push(`PRIORITIES: ${dashboard.priorities.slice(0, 3).join("; ")}`);
-      if (dashboard.completedToday?.length)
-        facts.push(`COMPLETED YESTERDAY/TODAY: ${dashboard.completedToday.slice(0, 5).join("; ")}`);
-    } else {
-      facts.push("FOCUS: dashboard unreachable — skip the focus section.");
-    }
-
     // One Sonnet call turns facts into the brief. Thinking off — this is
     // formatting, not reasoning.
     const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -157,11 +130,11 @@ export const marcoTeamMorningBrief = schedules.task({
           { type: "text", text: MARCO_PERSONA, cache_control: { type: "ephemeral" } },
           {
             type: "text",
-            text: `You are writing Oltre's daily team brief for the #oltre-office Slack channel. Rules:
+            text: `You are writing Oltre's daily team brief for Slack. Rules:
 - Start with the header line "Oltre — ${today}".
-- Sections in order: Pipeline, AR, Production, Wins (only if any), Today's focus (only if provided).
+- Sections in order: Pipeline, AR, Production.
 - Use ONLY the numbers in the FACTS block verbatim — never recalculate, never invent.
-- Tier-2 visible: no financial detail beyond the AR outstanding numbers given; never mention personnel matters, negotiation detail, Uplift AI, or Andrew's personal tasks.
+- Team visible: no financial detail beyond the AR outstanding numbers given; never mention personnel matters, negotiation detail, or anything personal.
 - Under 400 words. Slack markdown (*bold*, bullet lines). No exclamation marks, no emojis.
 - If a section's data is marked unavailable, include one plain line saying so.`,
           },
@@ -183,11 +156,14 @@ export const marcoTeamMorningBrief = schedules.task({
 
     await saveDeliverable("morning-brief", brief);
 
+    // Destination: Andrew has NOT chosen a team channel (2026-07-14 — he
+    // explicitly does not want these in #oltre-office for now). The brief
+    // goes to his DM until MARCO_OFFICE_CHANNEL_ID is set AND DRY_RUN=0.
     const channel = process.env.MARCO_OFFICE_CHANNEL_ID;
     if (dryRun || !channel) {
       const note = dryRun
-        ? "[DRY RUN — not posted to #oltre-office]"
-        : "[MARCO_OFFICE_CHANNEL_ID not set — invite Marco to #oltre-office and set the env var]";
+        ? "[preview — daily brief; goes only to you until you say otherwise]"
+        : "[no team channel configured — sending to you only]";
       await dmUser(ANDREW, `${note}\n\n${brief}`);
       return { ok: true, posted: false, dryRun, savedTo: "redis" };
     }

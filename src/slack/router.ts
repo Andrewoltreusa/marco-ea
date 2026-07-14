@@ -112,6 +112,23 @@ export function classifyIntent(
     return { skill: "general-query", args: { query: raw.trim() } };
   }
 
+  // Objection quick-draw — "objection: too expensive" returns the exact
+  // 3A script from the sales playbook (KB section 19) in one hop. Built
+  // for Bella mid-call; must run before write-intent so "objection: they
+  // want to log..." never drafts a Monday update.
+  const objMatch = raw.match(/^\s*(?:objection|возражение)\s*[:—–-]?\s*(.+)$/i);
+  if (objMatch) {
+    return {
+      skill: "kb-query",
+      args: {
+        query:
+          `From the Objection Handling section of the sales playbook, give the exact 3A script ` +
+          `(Acknowledge / Associate / Attack the frame) and the branch response for this objection: ${objMatch[1].trim()}. ` +
+          `Answer with the script itself, ready to say out loud, not a description of it.`,
+      },
+    };
+  }
+
   // ─────────────────────────────────────────────────────────
   // WRITE intent — runs after the read override
   // ─────────────────────────────────────────────────────────
@@ -135,6 +152,17 @@ export function classifyIntent(
     /\b(ship(s|ping|ment)?|eta|when does|production (on|for)|delivery)\b/.test(text)
   ) {
     return { skill: "production-eta", args: { query: extractSubject(raw) } };
+  }
+
+  // Dealer-process questions → KB (sections 23-24: dealer program + reply
+  // workflow). Must run BEFORE lead-check: "a dealer just replied, what do
+  // I do?" contains "repl…" and would otherwise misroute to lead-check
+  // (which happened live 2026-07-14).
+  if (
+    /\bdealers?\b/i.test(text) &&
+    /\b(reply|replied|responds?|responded|what should|what do|how do|process|next step)\b/i.test(text)
+  ) {
+    return { skill: "kb-query", args: { query: raw.trim() } };
   }
 
   // Lead check

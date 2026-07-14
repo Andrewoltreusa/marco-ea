@@ -54,6 +54,18 @@ describe("classifier", () => {
     expect(classifyIntent("what's the status of Rivertop").skill).toBe("deal-status");
   });
 
+  it("routes dealer-process questions to kb-query, not lead-check", () => {
+    expect(
+      classifyIntent("I had a dealer just reply to me. What should I be doing?").skill,
+    ).toBe("kb-query");
+    expect(classifyIntent("has Amanda gotten back to us?").skill).toBe("lead-check");
+  });
+
+  it("routes objection quick-draw to kb-query", () => {
+    expect(classifyIntent("objection: too expensive").skill).toBe("kb-query");
+    expect(classifyIntent("Objection - they want to think about it").skill).toBe("kb-query");
+  });
+
   it("routes how-to questions to kb-query", () => {
     expect(classifyIntent("how do we handle custom colors").skill).toBe("kb-query");
     expect(classifyIntent("how do I send a Sendblue follow-up").skill).toBe("kb-query");

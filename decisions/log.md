@@ -4,6 +4,20 @@ Append-only record of architectural and trust decisions. Every entry: date, deci
 
 ---
 
+## 2026-07-14 (evening) — Andrew's content & destination rulings; KB goes to sales-ready
+
+**Decisions (Andrew, verbal via chat):**
+1. **All 12 roadmap items approved** — tracked in ROADMAP.md with per-item status.
+2. **No posts to #oltre-office** — dry-run previews and (future) live briefs stay in Andrew's DM until he explicitly picks a destination channel.
+3. **Dashboard "Today's focus" removed from the morning brief** — the /api/state currentFocus data is stale; the brief is Monday-boards-only.
+4. **"Installed" is a terminal production status** — ship date is interchangeable with install date; Installed items past their ship date are done, not flagged (fix was already live in v20260714.4's DONE_STATUS list).
+5. **No church/KJV/personal content in Marco, anywhere** — Marco is a work app. Purged from the live KB: the KJV brand-voice rule, the KJV glossary entry, three "Andrew Personal Tasks" glossary rows; two personal phrasings rephrased. (The vault's KJV house rule still applies to non-Marco Oltre content work.)
+6. **KB now carries the sales canon** — sections 17-24 (ICP + selling principles, phone inquiry flow, 3A objection playbook, tier ladder w/ pending-review caveat, cadence v3 supersession, production-to-delivery office SOP, dealer program overview, dealer reply workflow) ingested from the canonical sources and verified live.
+7. **Contacts→Deals resolution follows relation columns** — deals are named by code, so deal-status now walks `contact_deal` links (getLinkedItems) instead of declaring "no deal found" (the Kevin Stone bug).
+8. **Dealer-process questions route to the KB**, not lead-check (live misroute 2026-07-14: "a dealer just replied, what should I do?" matched lead-check's "reply" keyword).
+
+---
+
 ## 2026-07-14 — Await-the-trigger fix, Redis-not-files, model tiering, broadcast implementation
 
 **Decision (root-cause fix):** The Vercel webhook must `await` every `tasks.trigger()` call. The fire-and-forget pattern froze the un-sent HTTP call with the lambda when the response returned — the root cause of Marco's "30-minute or never" replies (verified live: a 17:12Z DM produced its Trigger.dev run at 17:25:25Z, 2ms after a diagnostic GET thawed the instance). All three trigger sites now awaited with `idempotencyKey` (15m TTL); enqueue failures notify the user via `after()`; reaction events are filtered to draft-approval emojis route-side.

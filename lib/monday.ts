@@ -193,6 +193,52 @@ function scoreMatch(name: string, q: string, qTokens: string[]): number {
 }
 
 // ─────────────────────────────────────────────────────────────
+// Relation links — items connected via board_relation columns
+// ─────────────────────────────────────────────────────────────
+
+export interface LinkedItem {
+  id: string;
+  name: string;
+  boardId: string;
+  boardName: string;
+}
+
+/**
+ * All items linked to `itemId` through any board_relation column.
+ * This is how Contacts connect to Deals (contact_deal): deals are named
+ * by code (C26100), so name-based fuzzy search can never find them from
+ * a person's name — the relation column is the only bridge.
+ */
+export async function getLinkedItems(itemId: string): Promise<LinkedItem[]> {
+  const gql = `
+    query ($id: [ID!]!) {
+      items(ids: $id) {
+        column_values {
+          ... on BoardRelationValue {
+            linked_items { id name board { id name } }
+          }
+        }
+      }
+    }
+  `;
+  const data = await graphql<{
+    items: Array<{
+      column_values: Array<{
+        linked_items?: Array<{ id: string; name: string; board: { id: string; name: string } }>;
+      }>;
+    }>;
+  }>(gql, { id: [itemId] });
+
+  const out: LinkedItem[] = [];
+  for (const cv of data.items[0]?.column_values ?? []) {
+    for (const li of cv.linked_items ?? []) {
+      out.push({ id: li.id, name: li.name, boardId: li.board.id, boardName: li.board.name });
+    }
+  }
+  return out;
+}
+
+// ─────────────────────────────────────────────────────────────
 // Board dump — fetch ALL items on a board with column values
 // ─────────────────────────────────────────────────────────────
 
