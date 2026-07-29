@@ -7,6 +7,18 @@
 
 import type { BoardItemRow } from "./monday.js";
 
+/**
+ * Canonical AR 2026 column titles. Every read of an AR board column in
+ * this file MUST go through this map — if the board is ever renamed,
+ * this is the single place to update.
+ */
+export const AR_COLUMNS = {
+  contract: "Contract $",
+  payment1: "Payment #1",
+  payment2: "Payment #2",
+  status: "Status",
+} as const;
+
 export interface ArAggregates {
   totalItems: number;
   /** Sum of Contract $ across the whole board. */
@@ -23,8 +35,14 @@ export interface ArAggregates {
     paid: number;
     remaining: number;
   }>;
-  /** Per-month breakdown, keyed by YYYY-MM, sorted chronologically. */
-  byMonth: Array<{
+  /**
+   * Per-month breakdown, keyed by YYYY-MM, sorted chronologically —
+   * bucketed by the item's ship/It date column — NOT the contract
+   * signing month. extractShipMonth() prefers `#dup__of_ship__date` (a SHIP
+   * date), so "April 2026" here means "ships in April", not "signed in
+   * April". Consumers must label it honestly.
+   */
+  byShipMonth: Array<{
     month: string; // YYYY-MM
     label: string; // e.g. "April 2026"
     count: number;
@@ -49,8 +67,13 @@ export function fmtUsd(n: number): string {
   return `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-/** Pull a YYYY-MM out of the first available date column on an AR item. */
-function extractMonth(row: BoardItemRow): string | null {
+/**
+ * Pull a YYYY-MM out of the first available date column on an AR item.
+ * NOTE: the first candidate is `#dup__of_ship__date` — a SHIP date — so
+ * the month this returns is the item's ship month, not the month the
+ * contract was signed. See ArAggregates.byShipMonth.
+ */
+function extractShipMonth(row: BoardItemRow): string | null {
   // Priority order: specific date column IDs on AR 2026, then any Date title.
   const candidates = [
     row.columns["#dup__of_ship__date"],
@@ -93,13 +116,13 @@ export function computeArAggregates(items: BoardItemRow[]): ArAggregates {
   let totalPaid = 0;
 
   for (const item of items) {
-    const contract = parseUsd(item.columns["Contract $"]);
-    const pay1 = parseUsd(item.columns["Payment #1"]);
-    const pay2 = parseUsd(item.columns["Payment #2"]);
+    const contract = parseUsd(item.columns[AR_COLUMNS.contract]);
+    const pay1 = parseUsd(item.columns[AR_COLUMNS.payment1]);
+    const pay2 = parseUsd(item.columns[AR_COLUMNS.payment2]);
     const paid = pay1 + pay2;
     const remaining = contract - paid;
-    const status = item.columns["Status"] || "—";
-    const month = extractMonth(item); // YYYY-MM or null
+    const status = item.columns[AR_COLUMNS.status] || "—";
+    const month = extractShipMonth(item); // YYYY-MM or null
 
     totalContract += contract;
     totalPaid += paid;
@@ -136,7 +159,7 @@ export function computeArAggregates(items: BoardItemRow[]): ArAggregates {
     .map(([status, v]) => ({ status, ...v }))
     .sort((a, b) => b.contract - a.contract);
 
-  const byMonth = Array.from(byMonthMap.entries())
+  const byShipMonth = Array.from(byMonthMap.entries())
     .map(([month, v]) => ({ month, label: monthLabel(month), ...v }))
     .sort((a, b) => a.month.localeCompare(b.month));
 
@@ -146,7 +169,7 @@ export function computeArAggregates(items: BoardItemRow[]): ArAggregates {
     totalPaid,
     totalRemaining,
     byStatus,
-    byMonth,
+    byShipMonth,
   };
 }
 
@@ -159,9 +182,9 @@ export function topOutstanding(
     .map((r) => ({
       name: r.name,
       remaining:
-        parseUsd(r.columns["Contract $"]) -
-        parseUsd(r.columns["Payment #1"]) -
-        parseUsd(r.columns["Payment #2"]),
+        parseUsd(r.columns[AR_COLUMNS.contract]) -
+        parseUsd(r.columns[AR_COLUMNS.payment1]) -
+        parseUsd(r.columns[AR_COLUMNS.payment2]),
     }))
     .filter((r) => r.remaining > 0)
     .sort((a, b) => b.remaining - a.remaining)

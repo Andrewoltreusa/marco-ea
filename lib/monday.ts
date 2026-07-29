@@ -27,7 +27,10 @@ async function graphql<T>(query: string, variables: Record<string, unknown> = {}
     headers: {
       Authorization: token(),
       "Content-Type": "application/json",
-      "API-Version": "2024-01",
+      // Verified live 2026-07-29: boards/items_page/next_items_page/updated_at
+      // all resolve on 2025-04 with Marco's key (2024-01 was deprecated and
+      // silently rerouted by Monday). 2025-07 also works if this ages out.
+      "API-Version": "2025-04",
     },
     body: JSON.stringify({ query, variables }),
     // 25s deadline — a hung Monday call must fail into our catches, not
@@ -77,6 +80,100 @@ export const WRITE_ALLOWED_BOARDS = new Set<string>([
 ]);
 
 // ─────────────────────────────────────────────────────────────
+// Cursor-paged board item fetch (shared by search + board dump)
+// ─────────────────────────────────────────────────────────────
+
+/** Items requested per page. 500 is Monday's items_page maximum. */
+const ITEMS_PAGE_LIMIT = 500;
+
+/**
+ * Safety cap: 20 pages × 500 items = 10,000 items per board. If a board
+ * ever exceeds this we stop, log a warning, and mark the read incomplete
+ * so callers refuse to treat the result as authoritative.
+ */
+const ITEMS_MAX_PAGES = 20;
+
+interface PagedBoard<TItem> {
+  id: string;
+  name: string;
+  items: TItem[];
+  /** Number of pages actually fetched. */
+  pages: number;
+  /** false only when ITEMS_MAX_PAGES truncated the read. */
+  complete: boolean;
+}
+
+/**
+ * Fetch every item on the given boards, following Monday's items_page
+ * cursor until it is null (or the safety cap trips). The first call grabs
+ * page 1 for ALL boards in one round-trip; continuation pages use
+ * `next_items_page` and are sequential per board (Monday cursors must be
+ * consumed in order), with different boards' continuations running in
+ * parallel.
+ *
+ * `itemFields` is the GraphQL selection for each item (e.g. "id name").
+ */
+async function fetchBoardsPaged<TItem>(
+  boardIds: string[],
+  itemFields: string,
+): Promise<Array<PagedBoard<TItem>>> {
+  const firstGql = `
+    query ($boardIds: [ID!]!, $limit: Int!) {
+      boards(ids: $boardIds) {
+        id
+        name
+        items_page(limit: $limit) {
+          cursor
+          items { ${itemFields} }
+        }
+      }
+    }
+  `;
+  const nextGql = `
+    query ($cursor: String!, $limit: Int!) {
+      next_items_page(cursor: $cursor, limit: $limit) {
+        cursor
+        items { ${itemFields} }
+      }
+    }
+  `;
+
+  const data = await graphql<{
+    boards: Array<{
+      id: string;
+      name: string;
+      items_page: { cursor: string | null; items: TItem[] };
+    }>;
+  }>(firstGql, { boardIds, limit: ITEMS_PAGE_LIMIT });
+
+  return Promise.all(
+    (data.boards ?? []).map(async (board) => {
+      const items = [...board.items_page.items];
+      let cursor = board.items_page.cursor;
+      let pages = 1;
+      let complete = true;
+      while (cursor) {
+        if (pages >= ITEMS_MAX_PAGES) {
+          complete = false;
+          console.warn(
+            `[marco monday] board ${board.id} ("${board.name}") hit the ` +
+              `${ITEMS_MAX_PAGES}-page safety cap after ${items.length} items — read is TRUNCATED.`,
+          );
+          break;
+        }
+        const next = await graphql<{
+          next_items_page: { cursor: string | null; items: TItem[] };
+        }>(nextGql, { cursor, limit: ITEMS_PAGE_LIMIT });
+        items.push(...(next.next_items_page?.items ?? []));
+        cursor = next.next_items_page?.cursor ?? null;
+        pages++;
+      }
+      return { id: board.id, name: board.name, items, pages, complete };
+    }),
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
 // Item search (read)
 // ─────────────────────────────────────────────────────────────
 
@@ -116,37 +213,21 @@ export async function fuzzyFindItemsMulti(
   if (terms.length === 0) return out;
 
   // Monday supports items_page with query_params.rules for text filtering,
-  // but the simplest path for fuzzy "contains" is to pull recent items and
-  // score locally. Good enough for v1 — Oltre boards are small (<500 items).
-  const gql = `
-    query ($boardIds: [ID!]!) {
-      boards(ids: $boardIds) {
-        id
-        name
-        items_page(limit: 500) {
-          items {
-            id
-            name
-          }
-        }
-      }
-    }
-  `;
-  const data = await graphql<{
-    boards: Array<{
-      id: string;
-      name: string;
-      items_page: { items: Array<{ id: string; name: string }> };
-    }>;
-  }>(gql, { boardIds: boards });
+  // but the simplest path for fuzzy "contains" is to pull the full item
+  // list (cursor-paged — boards >500 items no longer silently truncate)
+  // and score locally.
+  const pagedBoards = await fetchBoardsPaged<{ id: string; name: string }>(
+    boards,
+    "id name",
+  );
 
   for (const term of terms) {
     const q = term.trim().toLowerCase();
     const qTokens = q.split(/\s+/).filter(Boolean);
 
     const candidates: MondayItem[] = [];
-    for (const board of data.boards) {
-      for (const item of board.items_page.items) {
+    for (const board of pagedBoards) {
+      for (const item of board.items) {
         const name = item.name.toLowerCase();
         const score = scoreMatch(name, q, qTokens);
         if (score > 0) {
@@ -249,7 +330,17 @@ export interface BoardItemRow {
   id: string;
   name: string;
   url: string;
+  /** Monday's item-level `updated_at` (ISO string), when the API returns it. */
+  updatedAt?: string;
   columns: Record<string, string>;
+}
+
+/** Read-completeness metadata attached to every getBoardItems result. */
+export interface BoardReadMeta {
+  /** false only when the page safety cap truncated the read. */
+  complete: boolean;
+  itemCount: number;
+  pages: number;
 }
 
 /**
@@ -257,57 +348,51 @@ export interface BoardItemRow {
  * filter/aggregate questions like "What's my contracted amount for
  * April?" where there's no single entity to search by name.
  *
- * Warning: boards with >500 items will hit the pagination limit.
- * Oltre boards are all <500 items as of 2026-04-17 so this is fine.
+ * Follows the items_page cursor to completion (safety cap: 20 pages /
+ * 10,000 items — `meta.complete` is false if the cap trips). Throws if
+ * the board doesn't exist or the API key can't see it — a missing board
+ * must never masquerade as an empty successful one.
+ *
+ * `opts.limit` is accepted for backward compatibility but ignored: the
+ * fetch always pages at Monday's 500-item page maximum until done.
  */
 export async function getBoardItems(
   boardId: string,
-  opts?: { limit?: number },
-): Promise<{ boardName: string; items: BoardItemRow[] }> {
-  const limit = opts?.limit ?? 500;
-  const gql = `
-    query ($boardId: [ID!]!, $limit: Int!) {
-      boards(ids: $boardId) {
-        id
-        name
-        items_page(limit: $limit) {
-          items {
-            id
-            name
-            column_values {
-              id
-              type
-              text
-              column { title }
-            }
-          }
-        }
-      }
-    }
-  `;
-  const data = await graphql<{
-    boards: Array<{
+  _opts?: { limit?: number },
+): Promise<{ boardName: string; items: BoardItemRow[]; meta: BoardReadMeta }> {
+  interface RawItem {
+    id: string;
+    name: string;
+    updated_at: string | null;
+    column_values: Array<{
       id: string;
-      name: string;
-      items_page: {
-        items: Array<{
-          id: string;
-          name: string;
-          column_values: Array<{
-            id: string;
-            type: string;
-            text: string | null;
-            column: { title: string };
-          }>;
-        }>;
-      };
+      type: string;
+      text: string | null;
+      column: { title: string };
     }>;
-  }>(gql, { boardId: [boardId], limit });
+  }
 
-  const board = data.boards?.[0];
-  if (!board) return { boardName: "unknown", items: [] };
+  const boards = await fetchBoardsPaged<RawItem>(
+    [boardId],
+    `
+      id
+      name
+      updated_at
+      column_values {
+        id
+        type
+        text
+        column { title }
+      }
+    `,
+  );
 
-  const items: BoardItemRow[] = board.items_page.items.map((item) => {
+  const board = boards[0];
+  if (!board) {
+    throw new Error(`Monday board ${boardId} not found or inaccessible`);
+  }
+
+  const items: BoardItemRow[] = board.items.map((item) => {
     const columns: Record<string, string> = {};
     for (const col of item.column_values) {
       if (!col.text) continue;
@@ -326,11 +411,16 @@ export async function getBoardItems(
       id: item.id,
       name: item.name,
       url: `https://oregonfivestar-company.monday.com/boards/${board.id}/pulses/${item.id}`,
+      updatedAt: item.updated_at ?? undefined,
       columns,
     };
   });
 
-  return { boardName: board.name, items };
+  return {
+    boardName: board.name,
+    items,
+    meta: { complete: board.complete, itemCount: items.length, pages: board.pages },
+  };
 }
 
 // ─────────────────────────────────────────────────────────────

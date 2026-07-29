@@ -7,10 +7,12 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "trigger:login": "trigger.dev login",
-    "trigger:dev": "trigger.dev dev",
-    "trigger:deploy:staging": "trigger.dev deploy --env staging",
-    "trigger:deploy:prod": "trigger.dev deploy --env prod"
+    "predeploy": "npm run typecheck && npm run test",
+    "deploy": "npm run predeploy && trigger deploy",
+    "trigger:login": "trigger login",
+    "trigger:dev": "trigger dev",
+    "trigger:deploy:staging": "trigger deploy --env staging",
+    "trigger:deploy:prod": "trigger deploy --env prod"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

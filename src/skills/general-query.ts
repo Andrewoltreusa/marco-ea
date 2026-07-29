@@ -75,8 +75,18 @@ export async function generalQuery(
   // Financial questions need the AR board regardless of what terms come
   // back — kick the fetch off NOW so it runs concurrently with the Claude
   // term-extraction call instead of after it.
-  const arPromise = isFinancialQuestion(question)
-    ? getBoardItems(BOARDS.AR_2026, { limit: 500 }).catch(() => null)
+  //
+  // FAIL CLOSED: if the AR fetch fails on a financial question we do NOT
+  // let the model compose from partial context (it would answer with no
+  // numbers, or worse, invented ones). We track the failure separately
+  // and short-circuit below.
+  const financial = isFinancialQuestion(question);
+  let arFailed = false;
+  const arPromise = financial
+    ? getBoardItems(BOARDS.AR_2026, { limit: 500 }).catch(() => {
+        arFailed = true;
+        return null;
+      })
     : Promise.resolve(null);
 
   // Step 1: Extract search terms — history helps Claude resolve pronouns.
@@ -121,6 +131,22 @@ export async function generalQuery(
   // per cash-position spec, no account-level drilldown. The raw rows must
   // never enter a Tier-2 prompt at all.
   const board = await arPromise;
+
+  // Fail closed: financial question + AR board unreachable → no answer,
+  // not a half-answer. (Still record the turn so follow-ups have context.)
+  if (financial && arFailed) {
+    const failText =
+      "The AR 2026 board is unreachable right now, so I can't give you financial numbers. Try again in a few minutes.";
+    if (channelId) {
+      await appendTurn(channelId, {
+        at: new Date().toISOString(),
+        user: question,
+        assistant: failText,
+      });
+    }
+    return failText;
+  }
+
   const arBoardRows: BoardItemRow[] | null =
     board && tier === 1 ? board.items : null;
   const arAggregates: ArAggregates | null = board
@@ -234,8 +260,11 @@ async function composeAnswer(
   } else {
     mondayContext = results
       .map((r) => {
+        // Skip "#columnId" keys — they duplicate the title-keyed values
+        // (lib/monday.ts stores every column under BOTH its title and
+        // "#<id>") and are machine noise in a prompt.
         const cols = Object.entries(r.item.columns)
-          .filter(([, v]) => v && v.trim())
+          .filter(([k, v]) => !k.startsWith("#") && v && v.trim())
           .map(([k, v]) => `  ${k}: ${v}`)
           .join("\n");
         const updates = r.item.updates
@@ -264,14 +293,14 @@ async function composeAnswer(
       )
       .join("\n");
     const monthLines =
-      arAgg.byMonth.length > 0
-        ? arAgg.byMonth
+      arAgg.byShipMonth.length > 0
+        ? arAgg.byShipMonth
             .map(
               (m) =>
                 `  - ${m.label} (${m.month}): ${m.count} items | Contract ${fmtUsd(m.contract)} | Paid ${fmtUsd(m.paid)} | Remaining ${fmtUsd(m.remaining)}`,
             )
             .join("\n")
-        : "  (no items had a parseable date)";
+        : "  (no items had a parseable ship date)";
     arContext += `
 
 AR 2026 AUTHORITATIVE AGGREGATES (pre-computed from all ${arAgg.totalItems} items on the board — use these EXACT numbers, do NOT recalculate):
@@ -281,15 +310,17 @@ AR 2026 AUTHORITATIVE AGGREGATES (pre-computed from all ${arAgg.totalItems} item
 - Total Remaining Balance (entire board): ${fmtUsd(arAgg.totalRemaining)}
 - By Status:
 ${statusLines}
-- By Month (bucketed by the item's Date column):
+- By Ship Month (bucketed by each item's ship date — if the user asked about when contracts were SIGNED, say that data isn't bucketed):
 ${monthLines}
 `;
   }
   if (arRows && arRows.length > 0) {
     const rows = arRows
       .map((r) => {
+        // Same "#columnId" duplicate filter as the per-entity context —
+        // halves the token cost of the row dump.
         const cols = Object.entries(r.columns)
-          .filter(([, v]) => v && v.trim())
+          .filter(([k, v]) => !k.startsWith("#") && v && v.trim())
           .map(([k, v]) => `${k}=${v}`)
           .join(" | ");
         return `- ${r.name} | ${cols}`;
@@ -339,7 +370,7 @@ RULES:
 - Be specific: use actual names, dates, amounts, statuses from the data below.
 - **Triangulate when you find partial matches.** If the user asked about "Lynette Renaissance Homes" and the data shows a contact named "Lynette" AND an account named "Renaissance Homes," combine them: "I see Lynette at Renaissance Homes in Contacts — [details]."
 - For **financial aggregate questions** (contracted total, cash, AR, balances, etc.): **ALWAYS use the "AR 2026 AUTHORITATIVE AGGREGATES" block verbatim. DO NOT add rows up yourself — you will make arithmetic errors.** If the user asks "what's my contracted amount" or similar full-board totals, report the pre-computed Total Contract $. If they ask about a specific status group (Deposit / Paid / Sample), use the By Status breakdown.
-- For **month-specific questions** (e.g. "contracted in April", "what about May?"): use the "By Month" breakdown in the aggregates block. Match the month name to the corresponding label (e.g. "April 2026" → use that row's numbers). Report the Contract / Paid / Remaining for that month exactly as pre-computed.
+- For **month-specific questions** (e.g. "contracted in April", "what about May?"): use the "By Ship Month" breakdown in the aggregates block. IMPORTANT: those buckets group items by their SHIP date, not the contract signing date. If the user explicitly asks about when contracts were signed, say the data is only bucketed by ship month and report it as such. Match the month name to the corresponding label (e.g. "April 2026" → use that row's numbers). Report the Contract / Paid / Remaining for that month exactly as pre-computed.
 - **HARD RULE: Never sum rows yourself to compute an aggregate.** The aggregates block has totals by Status and by Month already. If the user asks for a slice that isn't there (e.g. "Q1", "last week", a specific project by name), say "I don't have that pre-computed" rather than inventing a number. For per-item lookups by name, use the row dump — but only report that single row's fields, don't aggregate.
 - Only drill into individual rows from the raw dump when the user asks about a specific named item.
 - If a field like "Location" or "Address" is present, use it verbatim for address questions.

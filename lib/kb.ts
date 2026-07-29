@@ -9,12 +9,24 @@
  *
  * Caching layers:
  *   1. In-process cache      — 15 min TTL, zero-latency repeat reads.
- *   2. Upstash Redis         —  1 h TTL, survives cold starts across
- *                              Trigger.dev task runs.
- *   3. Monday authoritative  — source of truth. Cache invalidates when
- *                              the doc's `updated_at` moves forward.
+ *   2. Upstash Redis (fresh) —  1 h TTL ("marco:kb:v1"), survives cold
+ *                              starts across Trigger.dev task runs. A hit
+ *                              here is served WITHOUT touching Monday.
+ *   3. Upstash Redis (LKG)   —  7 d TTL ("marco:kb:lkg"), last-known-good.
+ *                              Served immediately when the fresh key has
+ *                              expired, while a background single-flight
+ *                              refresh ("marco:kb:refresh-lock") re-reads
+ *                              Monday. Cold workers no longer pay the
+ *                              21-page doc read on every KB question.
+ *   4. Monday authoritative  — source of truth. Only read when neither
+ *                              Redis key exists (blocking) or during the
+ *                              background refresh.
  *
- * Graceful fallback: if Monday errors AND Redis has any value (even
+ * Completeness gate: a fetched KB is only allowed to overwrite the Redis
+ * keys if it passes size + sentinel-section validation — a partial doc
+ * read can never clobber a good cached copy.
+ *
+ * Graceful fallback: if Monday errors AND anything is cached (even
  * stale), we return the stale value with a console.warn so Marco stays
  * answerable during transient outages.
  *
@@ -47,7 +59,11 @@ async function mondayGraphql<T>(
     headers: {
       Authorization: token(),
       "Content-Type": "application/json",
-      "API-Version": "2024-01",
+      // Verified live 2026-07-29: docs/blocks(page, limit) resolves on
+      // 2025-04 with Marco's key (2024-01 is deprecated). NOTE: 2025-04
+      // returns block types with spaces ("large title"), not underscores —
+      // renderDocBlock normalizes.
+      "API-Version": "2025-04",
     },
     body: JSON.stringify({ query, variables }),
     // 25s deadline — see lib/monday.ts graphql() for rationale.
@@ -86,6 +102,47 @@ let cached: CacheEntry | null = null;
 const IN_MEMORY_TTL_MS = 15 * 60 * 1000;
 const REDIS_TTL_SEC = 60 * 60;
 const REDIS_KEY = "marco:kb:v1";
+
+/** Last-known-good copy — long-lived so Marco survives Monday outages. */
+const LKG_KEY = "marco:kb:lkg";
+const LKG_TTL_SEC = 7 * 24 * 60 * 60;
+
+/** Single-flight lock so concurrent cold workers don't stampede the doc API. */
+const REFRESH_LOCK_KEY = "marco:kb:refresh-lock";
+const REFRESH_LOCK_TTL_SEC = 120;
+
+// ─────────────────────────────────────────────────────────────
+// Completeness gate
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Minimum plausible KB size. The live KB renders to well over 100k chars
+ * (21 pages / ~2,030 blocks as of 2026-07-29); anything under 50k means
+ * the doc read was truncated or the doc itself was gutted.
+ */
+const KB_MIN_CHARS = 50_000;
+
+/**
+ * Validate a freshly fetched KB before it is allowed to overwrite the
+ * cached copies. Returns null when valid, otherwise a human-readable
+ * reason. Sentinels: the doc title, the first section, and the newest
+ * section (17) — if the tail section is missing, pagination broke.
+ */
+function validateKbText(text: string): string | null {
+  if (text.length < KB_MIN_CHARS) {
+    return `too short (${text.length} chars < ${KB_MIN_CHARS})`;
+  }
+  if (!text.includes("Marco Knowledge Base")) {
+    return 'missing "Marco Knowledge Base" title';
+  }
+  if (!/\b1\. Lead Workflow/.test(text)) {
+    return 'missing "1. Lead Workflow" section sentinel';
+  }
+  if (!/\b17\. Who Oltre Sells To/.test(text)) {
+    return 'missing "17. Who Oltre Sells To" section sentinel (doc tail truncated?)';
+  }
+  return null;
+}
 
 // ─────────────────────────────────────────────────────────────
 // Monday fetchers
@@ -219,7 +276,9 @@ function renderDocBlock(block: {
   const text = extractText(parsed);
   if (!text) return null;
 
-  switch (block.type) {
+  // API 2024-01 returned underscore types ("large_title"); 2025-04 returns
+  // spaces ("large title"). Normalize so headings render either way.
+  switch (block.type.replace(/\s+/g, "_")) {
     case "large_title":
       return `# ${text}`;
     case "medium_title":
@@ -321,14 +380,160 @@ async function fetchAsLongText(itemId: string): Promise<DocFetchResult | null> {
 // Public API
 // ─────────────────────────────────────────────────────────────
 
+/** Read one of the KB cache keys, tolerating Redis being down. */
+async function readCacheKey(key: string): Promise<CacheEntry | null> {
+  try {
+    const raw = (await redis().get(key)) as CacheEntry | null;
+    if (raw && typeof raw.text === "string") return raw;
+  } catch (err) {
+    console.warn(
+      `[marco kb] redis read failed (${key}):`,
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+  return null;
+}
+
+/** Write-through to BOTH Redis keys (fresh 1h + last-known-good 7d). Best-effort. */
+async function writeCacheKeys(entry: CacheEntry): Promise<void> {
+  try {
+    await redis().set(REDIS_KEY, entry, { ex: REDIS_TTL_SEC });
+    await redis().set(LKG_KEY, entry, { ex: LKG_TTL_SEC });
+  } catch (err) {
+    console.warn(
+      "[marco kb] redis write failed:",
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+}
+
+/** Fetch the KB from Monday: Docs first, long-text fallback. */
+async function fetchFromMonday(docId: string): Promise<DocFetchResult | null> {
+  let fresh = await fetchAsDoc(docId);
+  if (!fresh) fresh = await fetchAsLongText(docId);
+  return fresh;
+}
+
 /**
- * Load the Marco KB, honoring in-memory → Redis → Monday in that order.
+ * Fetch from Monday, run the completeness gate, and (only if valid)
+ * write through to Redis + the in-memory cache.
  *
- * Invalidation: we compare Monday's `updated_at` against the cached
- * value and refetch if newer. When the in-memory cache is fresh (<15m)
- * we trust it without calling Monday, so there is a bounded window where
- * KB edits don't appear instantly. That's acceptable — the KB changes
- * on the order of days, not minutes.
+ * `prior` is whatever cached copy the caller already holds. Keeps the
+ * existing updated_at freshness check: when Monday's `updated_at` matches
+ * the prior entry's, the prior (already-validated) text is reused instead
+ * of being rewritten.
+ *
+ * Returns the entry now considered current. Throws only when the fetch
+ * produced nothing usable AND there is no prior to fall back to.
+ */
+async function fetchValidateAndCache(
+  docId: string,
+  prior: CacheEntry | null,
+): Promise<CacheEntry> {
+  let fresh: DocFetchResult | null;
+  try {
+    fresh = await fetchFromMonday(docId);
+  } catch (err) {
+    console.warn(
+      "[marco kb] Monday fetch failed:",
+      err instanceof Error ? err.message : String(err),
+    );
+    if (prior) {
+      console.warn("[marco kb] serving previously cached value");
+      cached = prior;
+      return prior;
+    }
+    throw err;
+  }
+
+  if (!fresh) {
+    if (prior) {
+      console.warn("[marco kb] Monday returned no content, serving cached value");
+      cached = prior;
+      return prior;
+    }
+    throw new Error(
+      `Marco KB is empty — MARCO_KB_DOC_ID=${docId} returned no content from Monday Docs or long-text fallback.`,
+    );
+  }
+
+  // updated_at freshness check: same source version as what we already
+  // hold → reuse it (re-warms the 1h key). The prior copy must itself
+  // pass the gate — otherwise fall through and cache the fresh text, so a
+  // truncated pre-fix cache can't survive on an unchanged updated_at.
+  if (
+    prior &&
+    prior.sourceUpdatedAt &&
+    fresh.updatedAt &&
+    prior.sourceUpdatedAt === fresh.updatedAt &&
+    validateKbText(prior.text) === null
+  ) {
+    const rewarmed: CacheEntry = { ...prior, fetchedAt: Date.now() };
+    cached = rewarmed;
+    await writeCacheKeys(rewarmed);
+    return rewarmed;
+  }
+
+  // Completeness gate — a truncated read must never clobber a good cache.
+  const problem = validateKbText(fresh.text);
+  if (problem) {
+    console.error(
+      `[marco kb] fetched KB failed completeness validation (${problem}) — keeping cached copy, NOT overwriting Redis`,
+    );
+    if (prior) {
+      cached = prior;
+      return prior;
+    }
+    throw new Error(`Marco KB failed completeness validation: ${problem}`);
+  }
+
+  const entry: CacheEntry = {
+    text: fresh.text,
+    fetchedAt: Date.now(),
+    sourceUpdatedAt: fresh.updatedAt,
+  };
+  cached = entry;
+  await writeCacheKeys(entry);
+  return entry;
+}
+
+/**
+ * Background refresh behind a Redis single-flight lock (NX EX 120): only
+ * one worker per 2-minute window re-reads the 21-page doc; everyone else
+ * keeps serving the LKG copy.
+ */
+async function refreshInBackground(
+  docId: string,
+  prior: CacheEntry,
+): Promise<void> {
+  let lock: unknown = null;
+  try {
+    lock = await redis().set(REFRESH_LOCK_KEY, "1", {
+      nx: true,
+      ex: REFRESH_LOCK_TTL_SEC,
+    });
+  } catch (err) {
+    console.warn(
+      "[marco kb] refresh lock acquire failed:",
+      err instanceof Error ? err.message : String(err),
+    );
+    return;
+  }
+  if (lock !== "OK") return; // another worker is already refreshing
+  await fetchValidateAndCache(docId, prior);
+}
+
+/**
+ * Load the Marco KB: in-memory (15m) → fresh Redis (1h) → last-known-good
+ * Redis (7d, served immediately with a background refresh) → blocking
+ * Monday fetch.
+ *
+ * Invalidation: the refresh path compares Monday's `updated_at` against
+ * the cached value and reuses the cached text when unchanged. When the
+ * in-memory or fresh-Redis cache is hot we trust it without calling
+ * Monday, so there is a bounded window where KB edits don't appear
+ * instantly. That's acceptable — the KB changes on the order of days,
+ * not minutes.
  */
 export async function loadKnowledgeBase(): Promise<string> {
   const docId = process.env.MARCO_KB_DOC_ID;
@@ -338,82 +543,36 @@ export async function loadKnowledgeBase(): Promise<string> {
     );
   }
 
-  // 1. In-memory cache
+  // 1. In-memory cache (15 min)
   if (cached && Date.now() - cached.fetchedAt < IN_MEMORY_TTL_MS) {
     return cached.text;
   }
 
-  // 2. Redis cache
-  let redisEntry: CacheEntry | null = null;
-  try {
-    const raw = (await redis().get(REDIS_KEY)) as CacheEntry | null;
-    if (raw && typeof raw.text === "string") {
-      redisEntry = raw;
-    }
-  } catch (err) {
-    console.warn(
-      "[marco kb] redis read failed:",
-      err instanceof Error ? err.message : String(err),
-    );
+  // 2. Fresh Redis (1h) — a hit here is authoritative-enough; no Monday call.
+  const fresh = await readCacheKey(REDIS_KEY);
+  if (fresh) {
+    cached = fresh;
+    return fresh.text;
   }
 
-  // 3. Monday — authoritative. Try Docs first, long-text as fallback.
-  let fresh: DocFetchResult | null = null;
-  try {
-    fresh = await fetchAsDoc(docId);
-    if (!fresh) fresh = await fetchAsLongText(docId);
-  } catch (err) {
-    console.warn(
-      "[marco kb] Monday fetch failed:",
-      err instanceof Error ? err.message : String(err),
+  // 3. Last-known-good (7d) — serve stale IMMEDIATELY, refresh in the
+  //    background behind the single-flight lock. Fire-and-forget: a
+  //    refresh failure only logs; the caller already has an answer.
+  const lkg = await readCacheKey(LKG_KEY);
+  if (lkg) {
+    cached = lkg;
+    refreshInBackground(docId, lkg).catch((err) =>
+      console.error(
+        "[marco kb] background refresh failed:",
+        err instanceof Error ? err.message : String(err),
+      ),
     );
-    // Graceful fallback: serve stale Redis if we have it.
-    if (redisEntry) {
-      console.warn("[marco kb] serving stale Redis value");
-      cached = redisEntry;
-      return redisEntry.text;
-    }
-    throw err;
+    return lkg.text;
   }
 
-  if (!fresh) {
-    // Monday returned no content. Fall back to Redis if possible.
-    if (redisEntry) {
-      console.warn("[marco kb] Monday returned no content, serving Redis");
-      cached = redisEntry;
-      return redisEntry.text;
-    }
-    throw new Error(
-      `Marco KB is empty — MARCO_KB_DOC_ID=${docId} returned no content from Monday Docs or long-text fallback.`,
-    );
-  }
-
-  // If Redis has the same (or newer) version, prefer it to avoid a
-  // needless rewrite. Otherwise write through.
-  if (
-    redisEntry &&
-    redisEntry.sourceUpdatedAt &&
-    fresh.updatedAt &&
-    redisEntry.sourceUpdatedAt === fresh.updatedAt
-  ) {
-    cached = redisEntry;
-    return redisEntry.text;
-  }
-
-  const entry: CacheEntry = {
-    text: fresh.text,
-    fetchedAt: Date.now(),
-    sourceUpdatedAt: fresh.updatedAt,
-  };
-  cached = entry;
-  try {
-    await redis().set(REDIS_KEY, entry, { ex: REDIS_TTL_SEC });
-  } catch (err) {
-    console.warn(
-      "[marco kb] redis write failed:",
-      err instanceof Error ? err.message : String(err),
-    );
-  }
+  // 4. Nothing cached anywhere — blocking fetch, as before. A stale
+  //    in-memory copy (>15m old) still counts as a fallback of last resort.
+  const entry = await fetchValidateAndCache(docId, cached);
   return entry.text;
 }
 

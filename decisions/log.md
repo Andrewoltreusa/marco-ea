@@ -4,6 +4,48 @@ Append-only record of architectural and trust decisions. Every entry: date, deci
 
 ---
 
+## 2026-07-29 (later) — Waves 2–3: data integrity + ops; the configure() race root cause
+
+**ROOT CAUSE FOUND (the 7-14 "mystery cutover" and today's recurrence):** the
+Trigger.dev SDK's `configure()` is a module-global singleton shared by every
+route in the oltre-dashboard Vercel bundle. The freight routes configure a
+different project's key; whichever route ran last in a warm lambda silently
+re-pointed the other's triggers. Evidence: freight.* runs stuck
+PENDING_VERSION in Marco's project while Marco's probe runs landed invisible
+in another project. **Decision:** Marco's route uses per-call
+`{ clientConfig: { accessToken } }` on every `tasks.trigger` and never touches
+the global config. The freight routes should adopt the same pattern (flagged
+to Andrew; not Marco's code).
+
+**Wave 2 (data integrity):** Monday API version 2024-01 → 2025-04 (verified
+live; 2024-01 was deprecated and silently rerouted). Cursor pagination to
+completion with a 20-page cap and completeness metadata; missing boards THROW
+instead of returning empty-successful; production-alert and morning-brief
+refuse to claim "nothing flagged"/authoritative totals on incomplete reads.
+AR aggregates renamed byShipMonth with honest ship-vs-signed labeling;
+financial questions fail closed when the AR board is unreachable. KB gets a
+7-day last-known-good copy, single-flight refresh lock, and a completeness
+gate (size + section sentinels) so a truncated read can never clobber a good
+cache. fleet-health: healthy is an explicit allowlist; unknown is never
+healthy; freshness from updatedAt; hardcoded dashboard token replaced by
+OLTRE_DASHBOARD_API_TOKEN. Duplicate #columnId serialization trimmed from
+prompts.
+
+**Wave 3 (ops):** production-alert dedup is per-item-per-recipient, marked
+only on DM success; DRY_RUN state uses its own prefix; ship-slip >3 business
+days implemented via stored ship dates. Morning-brief archives AFTER delivery
+(best-effort); publishing requires DRY_RUN=0 AND a code-side
+APPROVED_CHANNELS entry (empty until Andrew names a destination — env var
+alone can no longer publish); 5-business-day window; output validated (no
+!/emoji, <3k chars) with raw-facts fallback. Heartbeat task deleted (18 no-op
+runs/night, orphaned pipeline). npm scripts fixed to the real `trigger` bin +
+predeploy gate; CI (typecheck incl. tests, vitest, allowlist-drift check,
+gitleaks). Deep diagnostic GET now requires MARCO_DIAG_TOKEN bearer and
+discloses no key prefixes/deploy metadata; old-project key fallback removed.
+INSTALL.md rewritten to the real architecture. scratch-kbwrite.mts removed.
+
+---
+
 ## 2026-07-29 — Wave 1 of the Codex-findings remediation (silence killers + write safety)
 
 Codex's external audit (CODEX-FINDINGS.md) was independently verified — essentially

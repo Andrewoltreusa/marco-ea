@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck (includes tests)
+        run: npm run typecheck
+
+      - name: Tests
+        run: npm test
+
+      - name: Allowlist drift check
+        # The canonical policy is .claude/rules/slack-allowlist.md; the
+        # runtime table is src/slack/allowlist.ts. Every Slack ID in the
+        # canonical doc must appear in the compiled table and vice versa.
+        run: |
+          node -e "
+          const fs = require('fs');
+          const md = fs.readFileSync('.claude/rules/slack-allowlist.md', 'utf8');
+          const ts = fs.readFileSync('src/slack/allowlist.ts', 'utf8');
+          const idRe = /U[0-9A-Z]{8,}/g;
+          const mdIds = new Set(md.match(idRe) ?? []);
+          const tsIds = new Set(ts.match(idRe) ?? []);
+          // The Oltre HQ bot id appears in the doc as an explicit never-promote example.
+          const missing = [...mdIds].filter((id) => !tsIds.has(id));
+          const extra = [...tsIds].filter((id) => !mdIds.has(id));
+          if (missing.length || extra.length) {
+            console.error('Allowlist drift! In doc but not code:', missing, '— in code but not doc:', extra);
+            process.exit(1);
+          }
+          console.log('Allowlist in sync:', [...mdIds].length, 'ids');
+          "
+
+      - name: Secret scan (gitleaks)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
