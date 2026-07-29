@@ -24,7 +24,10 @@ function token(): string {
 async function call<T = unknown>(
   method: string,
   body: Record<string, unknown>,
+  attempt = 0,
 ): Promise<T> {
+  // 10s deadline: a hung Slack call must never eat the task's maxDuration
+  // budget — Trigger kills the run without executing our catches.
   const res = await fetch(`${SLACK_API}/${method}`, {
     method: "POST",
     headers: {
@@ -32,7 +35,22 @@ async function call<T = unknown>(
       "Content-Type": "application/json; charset=utf-8",
     },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10_000),
   });
+
+  // One bounded retry on rate limit, honoring Retry-After up to 5s.
+  if (res.status === 429 && attempt === 0) {
+    const waitSec = Math.min(
+      parseInt(res.headers.get("retry-after") ?? "1", 10) || 1,
+      5,
+    );
+    await new Promise((r) => setTimeout(r, waitSec * 1000));
+    return call<T>(method, body, 1);
+  }
+  if (!res.ok) {
+    throw new Error(`Slack ${method} HTTP ${res.status}`);
+  }
+
   const json = (await res.json()) as { ok: boolean; error?: string } & T;
   if (!json.ok) {
     throw new Error(`Slack ${method} failed: ${json.error ?? "unknown"}`);

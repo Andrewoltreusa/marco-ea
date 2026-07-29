@@ -20,14 +20,22 @@ export interface ConversationTurn {
   assistant: string;
 }
 
-const CONV_KEY = (channelId: string) => `marco:conv:${channelId}`;
+/**
+ * SECURITY: the key MUST be per-user. It used to be channel-only, which
+ * meant everyone in a shared channel wrote into one 5-turn window whose
+ * assistant turns (including Tier-1 financial answers) were replayed
+ * verbatim into the next user's prompt. Callers now pass a compound
+ * "<channelId>:<slackUserId>" key, and the inbound task only enables
+ * memory for DMs at all.
+ */
+const CONV_KEY = (convKey: string) => `marco:conv:${convKey}`;
 const MAX_TURNS = 5;
 const TTL_SEC = 30 * 60;
 
 export async function loadConversation(
-  channelId: string,
+  convKey: string,
 ): Promise<ConversationTurn[]> {
-  const raw = (await redis().get(CONV_KEY(channelId))) as
+  const raw = (await redis().get(CONV_KEY(convKey))) as
     | ConversationTurn[]
     | null;
   if (!Array.isArray(raw)) return [];
@@ -35,12 +43,12 @@ export async function loadConversation(
 }
 
 export async function appendTurn(
-  channelId: string,
+  convKey: string,
   turn: ConversationTurn,
 ): Promise<void> {
-  const existing = await loadConversation(channelId);
+  const existing = await loadConversation(convKey);
   const updated = [...existing, turn].slice(-MAX_TURNS);
-  await redis().set(CONV_KEY(channelId), updated, { ex: TTL_SEC });
+  await redis().set(CONV_KEY(convKey), updated, { ex: TTL_SEC });
 }
 
 /**

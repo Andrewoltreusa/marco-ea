@@ -4,6 +4,42 @@ Append-only record of architectural and trust decisions. Every entry: date, deci
 
 ---
 
+## 2026-07-29 — Wave 1 of the Codex-findings remediation (silence killers + write safety)
+
+Codex's external audit (CODEX-FINDINGS.md) was independently verified — essentially
+all 36 findings confirmed. Wave 1 ships the P0 class:
+
+1. **Request lifecycle replaces one-bit dedup** — `beginRequest`/`markResponded`
+   in Redis distinguish "being worked" from "answered"; a redelivery takes over
+   a stale claim instead of being poisoned into silence. Lifecycle is non-fatal:
+   Redis down = proceed (rare double answer beats guaranteed silence).
+2. **Every network call is bounded** — Anthropic client 45s×2 (SDK default was
+   10min×3, which outlived every task's maxDuration and skipped all catches);
+   Monday/KB fetches 25s; Slack 10s with one 429 retry honoring Retry-After.
+3. **Approval is exactly-once** — approve emoji narrowed to ✅ `white_check_mark`
+   only, reject to ❌ `x` only (per the 2026-04-15 decision; the wider set also
+   enabled a two-emoji double-write race). Atomic exec claim (SET NX) before the
+   Monday write; done-marker set the instant Monday accepts; ambiguous timeouts
+   become `outcome_unknown` and block re-approval until verified.
+4. **Draft previews live in the requester's DM** regardless of where the request
+   came from (a channel mention no longer exposes draft bodies to the channel).
+   Tier-2 one-draft slot reserved atomically. Signature: any pre-existing
+   "via Marco" attribution is stripped/rejected; forced self-signature for ALL
+   tiers (Tier-1 "signature freedom" deferred pending Andrew's decision).
+   Tier-1 draft TTL 24h: execute ≤12h, re-confirm (persisted) 12–24h.
+5. **Tier leak closed** — conversation memory is per-channel AND per-user, DMs
+   only (the channel-shared window replayed Tier-1 answers into other users'
+   prompts); AR context is code-gated (Tier 2: totals + top-5 outstanding only,
+   never raw rows); financial answers asked in channels are delivered by DM.
+6. **Webhook whitelist** — only app mentions and plain DM messages (captioned
+   file_share included) enter the pipeline; team-id asserted; Marco's own user
+   id filtered (his ✅ acks were burning a reaction-handler run per answer);
+   caption-less uploads get a visible "paste the text" note.
+7. **Child payloads are forge-safe** — the draft task re-derives tier/name from
+   the compiled allowlist; only Slack IDs cross the task boundary.
+
+---
+
 ## 2026-07-14 (evening) — Andrew's content & destination rulings; KB goes to sales-ready
 
 **Decisions (Andrew, verbal via chat):**

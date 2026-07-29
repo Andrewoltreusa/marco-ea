@@ -20,7 +20,16 @@ export function anthropic(): Anthropic {
       "ANTHROPIC_API_KEY not set. Copy it from oltre-agents env into Marco's Trigger.dev env.",
     );
   }
-  _client = new Anthropic({ apiKey });
+  _client = new Anthropic({
+    apiKey,
+    // SDK defaults are 10-minute timeout × 3 attempts — far beyond any
+    // task's maxDuration, so a hung call gets the run killed before our
+    // never-silent catches execute. 45s × 2 attempts fits every budget.
+    timeout: 45_000,
+    maxRetries: 1,
+    // Shared by kb-query's 1h prompt-cache breakpoint; harmless elsewhere.
+    defaultHeaders: { "anthropic-beta": "extended-cache-ttl-2025-04-11" },
+  });
   return _client;
 }
 

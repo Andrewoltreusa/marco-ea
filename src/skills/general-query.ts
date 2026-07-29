@@ -14,7 +14,7 @@
  *   "Remind me who Alex T. is meeting tomorrow"
  */
 
-import Anthropic from "@anthropic-ai/sdk";
+import { anthropic } from "../../lib/anthropic.js";
 import {
   fuzzyFindItemsMulti,
   getItemWithColumns,
@@ -34,6 +34,7 @@ import {
 import {
   computeArAggregates,
   fmtUsd,
+  topOutstanding,
   type ArAggregates,
 } from "../../lib/ar.js";
 
@@ -51,7 +52,7 @@ const ALL_SEARCH_BOARDS = [
  * "What's my contracted amount for April?" — Monday is the source of
  * truth for AR / cash / contracted amounts, NOT FreshBooks.
  */
-function isFinancialQuestion(text: string): boolean {
+export function isFinancialQuestion(text: string): boolean {
   return /\b(cash|ar\b|accounts? receivable|contract(ed)?|invoiced?|paid|balance|outstanding|revenue|owed?|owes?|payment|amount|receivable|accounts received)\b/i.test(
     text,
   );
@@ -114,11 +115,19 @@ export async function generalQuery(
   // Financial context: the AR fetch has been running since before term
   // extraction — pre-compute sums in code and pass them as authoritative
   // facts. Claude is unreliable at arithmetic over 30+ rows.
+  //
+  // TIER GATE (code-level, not prompt-level): Tier 1 gets aggregates plus
+  // the full row dump. Tier 2 gets aggregates + top-5 outstanding ONLY —
+  // per cash-position spec, no account-level drilldown. The raw rows must
+  // never enter a Tier-2 prompt at all.
   const board = await arPromise;
-  const arBoardRows: BoardItemRow[] | null = board ? board.items : null;
+  const arBoardRows: BoardItemRow[] | null =
+    board && tier === 1 ? board.items : null;
   const arAggregates: ArAggregates | null = board
     ? computeArAggregates(board.items)
     : null;
+  const arTop5 =
+    board && tier === 2 ? topOutstanding(board.items, 5) : null;
 
   // Step 3: Have Claude compose the answer, with conversation history.
   const answer = await composeAnswer(
@@ -128,6 +137,7 @@ export async function generalQuery(
     history,
     arBoardRows,
     arAggregates,
+    arTop5,
   );
 
   // Step 4: Save the turn so follow-ups have context.
@@ -146,7 +156,7 @@ async function extractSearchTerms(
   question: string,
   history: ConversationTurn[],
 ): Promise<string[]> {
-  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  const client = anthropic();
 
   const transcript = toTranscript(history);
   const userBlock =
@@ -213,8 +223,9 @@ async function composeAnswer(
   history: ConversationTurn[] = [],
   arRows: BoardItemRow[] | null = null,
   arAgg: ArAggregates | null = null,
+  arTop5: Array<{ name: string; remaining: number }> | null = null,
 ): Promise<string> {
-  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  const client = anthropic();
 
   // Build context from Monday per-entity search results
   let mondayContext = "";
@@ -287,6 +298,12 @@ ${monthLines}
     arContext += `
 FULL AR 2026 BOARD ITEMS (${arRows.length} rows — use for item-level lookups; for totals use the aggregates above):
 ${rows}`;
+  }
+  if (arTop5 && arTop5.length > 0) {
+    // Tier-2 view: the only account-level AR detail permitted.
+    arContext += `
+TOP OUTSTANDING (the only per-account AR detail you may share with this user):
+${arTop5.map((t) => `- ${t.name}: ${fmtUsd(t.remaining)} outstanding`).join("\n")}`;
   }
 
   const res = await client.messages.create({

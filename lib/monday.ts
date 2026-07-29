@@ -30,6 +30,9 @@ async function graphql<T>(query: string, variables: Record<string, unknown> = {}
       "API-Version": "2024-01",
     },
     body: JSON.stringify({ query, variables }),
+    // 25s deadline — a hung Monday call must fail into our catches, not
+    // eat the task's maxDuration (Trigger kills runs without running them).
+    signal: AbortSignal.timeout(25_000),
   });
   const json = (await res.json()) as {
     data?: T;

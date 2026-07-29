@@ -21,7 +21,7 @@
  *     breakpoint actually hits.
  */
 
-import Anthropic from "@anthropic-ai/sdk";
+import { anthropic } from "../../lib/anthropic.js";
 import { loadKnowledgeBase } from "../../lib/kb.js";
 import { MARCO_PERSONA } from "../../lib/marco-persona.js";
 import {
@@ -111,10 +111,8 @@ export async function kbQuery(args: KbQueryArgs): Promise<string> {
     return "I couldn't load the knowledge base just now — try again in a minute, or ask Andrew directly.";
   }
 
-  const client = new Anthropic({
-    apiKey: process.env.ANTHROPIC_API_KEY,
-    defaultHeaders: { "anthropic-beta": "extended-cache-ttl-2025-04-11" },
-  });
+  // Central client: 45s timeout, 1 retry, extended-cache-ttl header.
+  const client = anthropic();
 
   const tierNote =
     args.tier === 2

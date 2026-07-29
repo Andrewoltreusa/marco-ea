@@ -20,7 +20,7 @@
  */
 
 import { schedules, logger } from "@trigger.dev/sdk";
-import Anthropic from "@anthropic-ai/sdk";
+import { anthropic } from "../../lib/anthropic.js";
 import { getBoardItems, BOARDS, type BoardItemRow } from "../../lib/monday.js";
 import { postMessage, dmUser } from "../../lib/slack.js";
 import { saveDeliverable } from "../../lib/deliverables.js";
@@ -119,7 +119,7 @@ export const marcoTeamMorningBrief = schedules.task({
 
     // One Sonnet call turns facts into the brief. Thinking off — this is
     // formatting, not reasoning.
-    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    const client = anthropic();
     let brief: string;
     try {
       const res = await client.messages.create({

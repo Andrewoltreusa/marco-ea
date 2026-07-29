@@ -50,6 +50,8 @@ async function mondayGraphql<T>(
       "API-Version": "2024-01",
     },
     body: JSON.stringify({ query, variables }),
+    // 25s deadline — see lib/monday.ts graphql() for rationale.
+    signal: AbortSignal.timeout(25_000),
   });
   const json = (await res.json()) as {
     data?: T;

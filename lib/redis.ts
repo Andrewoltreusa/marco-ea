@@ -31,17 +31,62 @@ export function redis(): Redis {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Inbound event dedup
+// Request lifecycle (replaces the old one-bit event dedup)
 // ─────────────────────────────────────────────────────────────
+//
+// The one-bit claim had a poisoned-claim failure: a worker that claimed
+// the event and then died left every redelivery returning "duplicate"
+// even though no answer was ever sent. The lifecycle distinguishes
+// "being worked on" from "answered", and lets a redelivery take over a
+// stale claim.
 
-/**
- * Claim a Slack event delivery. Returns true exactly once per key —
- * duplicate deliveries (Slack retries, double triggers) return false.
- * 15-minute window matches Slack's retry ladder with room to spare.
- */
-export async function claimEvent(key: string): Promise<boolean> {
-  const res = await redis().set(key, "1", { nx: true, ex: 900 });
-  return res === "OK";
+interface RequestState {
+  status: "processing" | "responded";
+  startedAt: string;
+  respondedAt?: string;
+}
+
+const REQ_TTL_SEC = 900; // covers Slack's retry ladder
+const STALE_PROCESSING_MS = 120_000; // = inbound maxDuration
+
+export type BeginRequestResult = "fresh" | "duplicate" | "takeover";
+
+export async function beginRequest(key: string): Promise<BeginRequestResult> {
+  const r = redis();
+  const state: RequestState = {
+    status: "processing",
+    startedAt: new Date().toISOString(),
+  };
+  const won = await r.set(key, state, { nx: true, ex: REQ_TTL_SEC });
+  if (won === "OK") return "fresh";
+
+  const existing = (await r.get(key)) as RequestState | null;
+  if (!existing) {
+    await r.set(key, state, { ex: REQ_TTL_SEC });
+    return "fresh";
+  }
+  if (existing.status === "responded") return "duplicate";
+
+  const ageMs = Date.now() - new Date(existing.startedAt).getTime();
+  if (!Number.isFinite(ageMs) || ageMs > STALE_PROCESSING_MS) {
+    // Previous worker died mid-run — take over and re-process.
+    await r.set(key, state, { ex: REQ_TTL_SEC });
+    return "takeover";
+  }
+  return "duplicate";
+}
+
+/** Best-effort terminal marker — only "responded" suppresses redeliveries for good. */
+export async function markResponded(key: string): Promise<void> {
+  try {
+    await redis().set(
+      key,
+      { status: "responded", respondedAt: new Date().toISOString() },
+      { ex: REQ_TTL_SEC },
+    );
+  } catch {
+    // never let bookkeeping break a delivered answer
+  }
 }
 
 // ─────────────────────────────────────────────────────────────
