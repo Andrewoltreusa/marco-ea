@@ -4,6 +4,56 @@ Append-only record of architectural and trust decisions. Every entry: date, deci
 
 ---
 
+## 2026-07-29 (evening) — Wave 4: product correctness (routing, honesty, voice, audit)
+
+Final wave of the Codex-findings remediation (findings 18, 19, 28–33).
+Deployed as v20260729.5 and E2E-verified.
+
+**Routing (the "Log on C26100" incident can't recur):** explicit
+`log (this) on/against <item>` commands — English and Russian `запиши на` —
+are detected BEFORE the read-noun override, so a body containing "the latest
+update" can no longer swallow a write command into the read path. The live
+incident phrasing now routes to monday-update and produces a DM draft
+preview (E2E-verified: draft stored, preview posted, C26100 matched).
+"show me the log on C26100" still reads. Objection quick-draw moved to the
+very top (anchored `^`) so "objection: …log this on…" still never drafts.
+
+**board-stats (new skill, zero LLM):** "how many leads/deals/contacts",
+"deals closing this week", "count the …" are now counted in code from a full
+paginated board read — never by the model. Answers cite
+`Source: Monday <board> (N items read[, incomplete])`. Routed after the
+cash/AR rule so "how many deals are paid" keeps its code-computed AR path.
+
+**Contract honesty:** lead-check answers end "— from Monday only; I did not
+check email" until an inbox integration is decided. deal-status adds the
+promised payment line (Tier 1 only) from the linked AR 2026 row via the
+board relation. find-in-vault retired as a classifier label — the fallback
+now says what actually runs (general-query); the union member stays for
+compat. extractSubject strips trailing verbs ("Schellenberg ship" →
+"Schellenberg").
+
+**Voice/policy single-source:** persona gains the six-weeks/15-day lead-time
+rule and an anti-fabrication rule (never claim an action — logging, sending,
+updating — that the code did not perform). general-query's rules now build
+on MARCO_PERSONA instead of duplicating it. Stale Sendblue go-live line and
+church examples removed from kb-query + router tests per Andrew's 2026-07-14
+ruling. Best-understanding KB answers must be labeled and must never state
+facts (prices, dates, lead times) not in the KB.
+
+**Audit (finding 32):** every handled request — including refusals and
+errors — LPUSHes `{ts, eventId, user, tier, skill, ok, ms}` to
+`marco:audit:requests`, trimmed to 1,000 entries, strictly best-effort.
+Verified live: both E2E requests appeared with correct tier/skill/latency.
+
+**Tests:** 17 → 29 (24 router + 5 board-stats/dates), typecheck clean.
+
+**Deferred deliberately:** dependency upgrades (Trigger.dev SDK/CLI,
+Anthropic SDK) wait for a controlled branch now that CI exists; Tier-1
+signature freedom still awaits Andrew's decision (forced self-signature for
+all tiers remains in force).
+
+---
+
 ## 2026-07-29 (later) — Waves 2–3: data integrity + ops; the configure() race root cause
 
 **ROOT CAUSE FOUND (the 7-14 "mystery cutover" and today's recurrence):** the

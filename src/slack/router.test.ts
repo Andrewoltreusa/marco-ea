@@ -42,6 +42,16 @@ describe("classifier", () => {
     expect(classifyIntent("when does Schellenberg ship?").skill).toBe("production-eta");
   });
 
+  it("strips trailing verbs from extracted subjects", () => {
+    // "Schellenberg ship" would never fuzzy-match the board item.
+    expect(classifyIntent("when does Schellenberg ship?").args.query).toBe(
+      "Schellenberg",
+    );
+    expect(classifyIntent("when does Rivertop close?").args.query).toBe(
+      "Rivertop",
+    );
+  });
+
   it("routes lead check", () => {
     expect(classifyIntent("has Amanda gotten back to us?").skill).toBe("lead-check");
   });
@@ -69,12 +79,74 @@ describe("classifier", () => {
   it("routes how-to questions to kb-query", () => {
     expect(classifyIntent("how do we handle custom colors").skill).toBe("kb-query");
     expect(classifyIntent("how do I send a Sendblue follow-up").skill).toBe("kb-query");
-    expect(classifyIntent("what's our brand voice for church work").skill).toBe("kb-query");
+    expect(classifyIntent("what's our brand voice for follow-ups").skill).toBe("kb-query");
   });
 
-  it("falls back to vault search for non-process queries", () => {
-    // Use a phrase that doesn't match any process keyword.
-    expect(classifyIntent("random text about Alex").skill).toBe("find-in-vault");
+  it("routes explicit 'log on <item>' commands to monday-update", () => {
+    // Live incident 2026-07: this exact phrasing hit the read path and
+    // the model claimed a write it never performed.
+    expect(classifyIntent("Log on C26100: pickup confirmed").skill).toBe(
+      "monday-update",
+    );
+    expect(
+      classifyIntent("log this on C26100 — installer confirmed pickup").skill,
+    ).toBe("monday-update");
+    expect(
+      classifyIntent("log this against C26100: deposit received").skill,
+    ).toBe("monday-update");
+  });
+
+  it("routes Russian 'запиши на' commands to monday-update", () => {
+    expect(
+      classifyIntent("запиши на C26100: самовывоз подтверждён").skill,
+    ).toBe("monday-update");
+  });
+
+  it("read-noun override does not swallow explicit log commands", () => {
+    // Body contains "the latest update" — the determiner+noun read
+    // heuristic must not reroute an explicit log command.
+    expect(
+      classifyIntent(
+        "Log on C26100: sent them the latest update from the installer",
+      ).skill,
+    ).toBe("monday-update");
+  });
+
+  it("still routes read-noun 'update' phrasings to general-query", () => {
+    expect(classifyIntent("pull up the latest update on Rivertop").skill).toBe(
+      "general-query",
+    );
+    // "the log on X" is a read of the updates feed, not a write.
+    expect(classifyIntent("show me the log on C26100").skill).toBe(
+      "general-query",
+    );
+  });
+
+  it("routes board-aggregate questions to board-stats", () => {
+    expect(classifyIntent("how many leads do we have?").skill).toBe(
+      "board-stats",
+    );
+    expect(classifyIntent("how many deals are in the pipeline?").skill).toBe(
+      "board-stats",
+    );
+    expect(classifyIntent("can you count the contacts?").skill).toBe(
+      "board-stats",
+    );
+  });
+
+  it("routes closing-this-week to board-stats with the raw query", () => {
+    const r = classifyIntent("what deals are closing this week?");
+    expect(r.skill).toBe("board-stats");
+    expect(r.args.query).toBe("what deals are closing this week?");
+  });
+
+  it("falls back to general-query for non-process queries", () => {
+    // find-in-vault was only ever a label for this path — the fallback
+    // now says what actually runs (CODEX finding 19).
+    expect(classifyIntent("random text about Alex").skill).toBe("general-query");
+    expect(classifyIntent("what do we know about polymer sealants?").skill).toBe(
+      "general-query",
+    );
   });
 });
 

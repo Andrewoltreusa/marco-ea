@@ -32,6 +32,7 @@ import { leadCheck } from "../skills/lead-check.js";
 import { agentFleetHealth } from "../skills/agent-fleet-health.js";
 import { generalQuery } from "../skills/general-query.js";
 import { kbQuery } from "../skills/kb-query.js";
+import { boardStats } from "../skills/board-stats.js";
 
 export interface NormalizedSlackEvent {
   source: "slash_command" | "app_mention" | "message_im";
@@ -56,6 +57,8 @@ export const marcoSlackInbound = task({
   maxDuration: 120,
   retry: { maxAttempts: 1 },
   run: async (payload: NormalizedSlackEvent & { __probe?: boolean }) => {
+    const startedAt = Date.now();
+
     // Diagnostic probe — the Vercel route GET handler uses this to verify
     // end-to-end trigger plumbing without producing any Slack side-effects.
     if (payload.__probe === true) {
@@ -80,6 +83,27 @@ export const marcoSlackInbound = task({
     });
     logger.info("routed", { tier: routed.tier, skill: routed.skill });
 
+    const lifecycleKey = payload.eventId
+      ? `marco:evt:${payload.eventId}`
+      : payload.eventTs
+        ? `marco:evt:${payload.channel}:${payload.eventTs}`
+        : null;
+    const canReact = payload.source !== "slash_command" && !!payload.eventTs;
+
+    // Durable request audit (CODEX finding 32) — one bounded record per
+    // handled request, on every delivery path including errors. Strictly
+    // best-effort: an audit failure must never affect the reply.
+    const audit = (ok: boolean) =>
+      auditRequest({
+        ts: new Date().toISOString(),
+        eventId: lifecycleKey,
+        user: payload.slackUserId,
+        tier: routed.tier,
+        skill: routed.skill,
+        ok,
+        ms: Date.now() - startedAt,
+      });
+
     if (routed.skill === "refuse") {
       await logAccessDenial(payload, routed);
       if (!routed.rateLimited) {
@@ -95,18 +119,13 @@ export const marcoSlackInbound = task({
           });
         }
       }
+      await audit(true);
       return { ok: true, tier: 3, posted: !routed.rateLimited };
     }
 
     // Everything below is an authorized (Tier 1/2) request. The outer
     // catch is the never-silent guarantee of last resort: ANY unexpected
     // throw becomes a DM to the asker, not a dead run in a dashboard.
-    const lifecycleKey = payload.eventId
-      ? `marco:evt:${payload.eventId}`
-      : payload.eventTs
-        ? `marco:evt:${payload.channel}:${payload.eventTs}`
-        : null;
-    const canReact = payload.source !== "slash_command" && !!payload.eventTs;
 
     try {
       // ─── Request lifecycle (dedup that can't poison) ────────
@@ -116,6 +135,8 @@ export const marcoSlackInbound = task({
         try {
           const state = await beginRequest(lifecycleKey);
           if (state === "duplicate") {
+            // No audit record: nothing was delivered, and the run that
+            // actually answered already recorded one for this eventId.
             logger.info("duplicate delivery ignored", { lifecycleKey });
             return { ok: true, deduped: true };
           }
@@ -164,6 +185,7 @@ export const marcoSlackInbound = task({
             await swapReaction(payload.channel, payload.eventTs!, "eyes", "memo");
           }
           if (lifecycleKey) await markResponded(lifecycleKey);
+          await audit(true);
           return {
             ok: true,
             tier: routed.tier,
@@ -184,6 +206,7 @@ export const marcoSlackInbound = task({
             await swapReaction(payload.channel, payload.eventTs!, "eyes", "warning");
           }
           if (lifecycleKey) await markResponded(lifecycleKey);
+          await audit(false);
           return { ok: false, tier: routed.tier, skill: "monday-update", error: msg };
         }
       }
@@ -238,6 +261,7 @@ export const marcoSlackInbound = task({
         );
       }
       if (lifecycleKey) await markResponded(lifecycleKey);
+      await audit(!hadError);
       return { ok: true, tier: routed.tier, skill: routed.skill };
     } catch (err) {
       // ─── Never-silent of last resort ──────────────────────────
@@ -258,6 +282,7 @@ export const marcoSlackInbound = task({
           /* best-effort */
         }
       }
+      await audit(false);
       return { ok: false, tier: routed.tier, error: msg };
     }
   },
@@ -317,6 +342,10 @@ async function runSkill(
       return { text: await leadCheck(q) };
     case "agent-fleet-health":
       return { text: await agentFleetHealth(tier) };
+    case "board-stats":
+      // Zero-LLM board aggregates ("how many leads do we have?") —
+      // counted in code from a full board read, never by the model.
+      return { text: await boardStats(q || payload.text) };
     case "kb-query": {
       // Feature-flagged. If ENABLE_KB isn't "true", OR the KB call throws,
       // fall through to general-query so Marco stays answerable while we
@@ -366,6 +395,34 @@ async function runSkill(
       return { text: await generalQuery(q, tier, ch) };
     default:
       return { text: await generalQuery(q || "help", tier, ch) };
+  }
+}
+
+/**
+ * Durable per-request audit record (CODEX finding 32). One JSON entry per
+ * handled request — refusals, drafts, reads, and failures alike — newest
+ * first, capped at 1000. Read back: LRANGE marco:audit:requests 0 -1
+ *
+ * Strictly best-effort: any Redis failure is logged and swallowed so the
+ * audit can never affect a reply that was already delivered.
+ */
+async function auditRequest(rec: {
+  ts: string;
+  eventId: string | null;
+  user: string;
+  tier: number;
+  skill: string;
+  ok: boolean;
+  ms: number;
+}): Promise<void> {
+  try {
+    const r = redis();
+    await r.lpush("marco:audit:requests", JSON.stringify(rec));
+    await r.ltrim("marco:audit:requests", 0, 999);
+  } catch (err) {
+    logger.warn("request audit failed", {
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 }
 

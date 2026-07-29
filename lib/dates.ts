@@ -48,3 +48,22 @@ export function parseIsoDateNoonUtc(s: string): Date | null {
   const d = new Date(`${m[0]}T12:00:00Z`);
   return Number.isNaN(d.getTime()) ? null : d;
 }
+
+/**
+ * Midnight UTC of the Monday that starts the ISO-8601 week containing `d`
+ * (weeks run Monday through Sunday). Time of day is ignored.
+ */
+export function startOfIsoWeekUtc(d: Date): Date {
+  const t = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+  const day = new Date(t).getUTCDay(); // 0=Sun … 6=Sat
+  const daysFromMonday = (day + 6) % 7;
+  return new Date(t - daysFromMonday * DAY_MS);
+}
+
+/**
+ * True when both dates fall inside the same ISO week (Mon–Sun, UTC
+ * calendar dates). Used by board-stats for "deals closing this week".
+ */
+export function isSameIsoWeek(a: Date, b: Date): boolean {
+  return startOfIsoWeekUtc(a).getTime() === startOfIsoWeekUtc(b).getTime();
+}

@@ -9,12 +9,14 @@
  * Examples that land here:
  *   "Have we ever worked with Bob Jones?"
  *   "Who's the contact for the Napa project?"
- *   "What deals are closing this week?"
- *   "How many leads do we have?"
  *   "Remind me who Alex T. is meeting tomorrow"
+ *
+ * (Board-aggregate questions — "how many leads do we have?", "what deals
+ * are closing this week?" — route to board-stats and are counted in code.)
  */
 
 import { anthropic } from "../../lib/anthropic.js";
+import { MARCO_PERSONA } from "../../lib/marco-persona.js";
 import {
   fuzzyFindItemsMulti,
   getItemWithColumns,
@@ -348,36 +350,22 @@ ${arTop5.map((t) => `- ${t.name}: ${fmtUsd(t.remaining)} outstanding`).join("\n"
     thinking: { type: "disabled" },
     system: [
       {
-        // Static persona + rules — byte-identical across every call, so
-        // it forms a cacheable prefix. Dynamic content (tier note, Monday
-        // context) comes AFTER the breakpoint in the second block.
+        // Static prefix — MARCO_PERSONA (single-source voice from
+        // lib/marco-persona.ts, shared with kb-query) plus the
+        // query-specific rules that only apply to this skill.
+        // Byte-identical across every call, so it forms a cacheable
+        // prefix. Dynamic content (tier note, Monday context) comes
+        // AFTER the breakpoint in the second block.
         type: "text",
-        text: `You are Marco, Oltre Castings & Design's company secretary. You answer questions about the business using Monday.com data provided below.
+        text: `${MARCO_PERSONA}
 
-LANGUAGE: The user may write in English OR Russian (Alex Polkhovskiy and Alex Tretiakov often write in Russian). **Regardless of input language, ALWAYS respond in English.** This keeps Monday updates, Slack messages, and team communication consistent. Do not respond in Russian, Spanish, or any other language — English only, every time.
-
-OLTRE SYSTEMS CONTEXT (authoritative — use these exactly):
-- Pipeline, contacts, leads, production → Monday.com (the boards below)
-- **Cash / AR / contracted amounts / invoicing / payments → Monday AR 2026 board** (NOT FreshBooks, NOT Xero, NOT QuickBooks). Shopify orders land in Monday, not FreshBooks — Monday is the source of truth.
-- Internal state, agent health, dashboards → oltre-dashboard.vercel.app
-- Email → Gmail (Andrew) / Outlook (Bella @ bellab@oltreusa.com)
-- Slack workspace → Oltre HQ
-
-Never mention FreshBooks, Xero, or QuickBooks in your answers. If the user asks about financial data, the answer lives in the AR 2026 board dump below.
-
-RULES:
-- Be concise: 2-4 sentences maximum unless the question requires a list/table.
-- Be specific: use actual names, dates, amounts, statuses from the data below.
+GENERAL-QUERY RULES (applied on top of the persona; Monday data is provided below):
 - **Triangulate when you find partial matches.** If the user asked about "Lynette Renaissance Homes" and the data shows a contact named "Lynette" AND an account named "Renaissance Homes," combine them: "I see Lynette at Renaissance Homes in Contacts — [details]."
 - For **financial aggregate questions** (contracted total, cash, AR, balances, etc.): **ALWAYS use the "AR 2026 AUTHORITATIVE AGGREGATES" block verbatim. DO NOT add rows up yourself — you will make arithmetic errors.** If the user asks "what's my contracted amount" or similar full-board totals, report the pre-computed Total Contract $. If they ask about a specific status group (Deposit / Paid / Sample), use the By Status breakdown.
 - For **month-specific questions** (e.g. "contracted in April", "what about May?"): use the "By Ship Month" breakdown in the aggregates block. IMPORTANT: those buckets group items by their SHIP date, not the contract signing date. If the user explicitly asks about when contracts were signed, say the data is only bucketed by ship month and report it as such. Match the month name to the corresponding label (e.g. "April 2026" → use that row's numbers). Report the Contract / Paid / Remaining for that month exactly as pre-computed.
 - **HARD RULE: Never sum rows yourself to compute an aggregate.** The aggregates block has totals by Status and by Month already. If the user asks for a slice that isn't there (e.g. "Q1", "last week", a specific project by name), say "I don't have that pre-computed" rather than inventing a number. For per-item lookups by name, use the row dump — but only report that single row's fields, don't aggregate.
 - Only drill into individual rows from the raw dump when the user asks about a specific named item.
-- If a field like "Location" or "Address" is present, use it verbatim for address questions.
-- If you found matching items, reference them by name and board. Include a Monday link when you can.
-- If nothing matches, tell the user what to try next — don't dead-end.
-- Don't make up data. Only use what's in the context below.
-- Don't use exclamation marks or emojis.`,
+- If a field like "Location" or "Address" is present, use it verbatim for address questions.`,
         cache_control: { type: "ephemeral" },
       },
       {

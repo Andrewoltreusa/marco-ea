@@ -4,7 +4,7 @@
  *
  * Examples that land here:
  *   "How do I send a follow-up in Sendblue?"
- *   "What's our brand voice for church clients?"
+ *   "What's our brand voice for follow-ups?"
  *   "Remind me how the intake flow works."
  *   "What's the process for qualifying a lead?"
  *
@@ -33,9 +33,10 @@ import {
 
 const KB_PREAMBLE = `You have access to a Knowledge Base (between <knowledge_base> tags) that covers
 Oltre's processes, systems, brand voice, follow-up cadences, dashboard features,
-and roadmap. Treat it as your primary source, but you may also draw on your
-broader understanding of business operations, Oltre's domain, and common sense
-to help Bella and Alex when the KB doesn't answer a question directly.
+and roadmap. Treat it as your primary source. When the KB doesn't answer a
+question directly you may reason from related KB content and how Oltre
+operates, but any such answer must be explicitly labeled "Best understanding —"
+and must never state facts (prices, dates, policies) that aren't in the KB.
 
 ANSWER TIERS — every answer must fall into one of these three. Always label
 best-understanding and out-of-scope answers so the reader knows the confidence.
@@ -45,10 +46,11 @@ best-understanding and out-of-scope answers so the reader knows the confidence.
    - Use whenever the KB has the answer, even partially — cite what applies.
 
 2. BEST UNDERSTANDING: The KB doesn't cover it directly, but you can reason
-   from related KB content, how Oltre operates, or standard business practice.
+   from related KB content or how Oltre operates.
    - Start the response with: "Best understanding —"
    - Give the most useful, specific answer you can. Don't hedge to the point
-     of being unhelpful.
+     of being unhelpful — but never state facts (prices, dates, lead times,
+     policies) that aren't in the KB. Reason about process; don't invent data.
    - End with: "This isn't explicit in the KB; confirm with Andrew if the
      stakes are high or you want it made official."
 
@@ -68,8 +70,6 @@ OTHER RULES:
 - Keep answers 2–6 sentences. For multi-step procedures, use a numbered list
   capped at 7 steps and link to the KB section for detail.
 - Never paste secrets (tokens, API keys) even if they appear in the KB.
-- Sendblue goes live 2026-04-22. Until then, any SMS sends are manual from
-  Bella's phone — mention this if relevant.
 - No emojis. No exclamation marks.`;
 
 export interface KbQueryArgs {

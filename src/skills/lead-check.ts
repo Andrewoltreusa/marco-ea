@@ -11,10 +11,25 @@ import {
   BOARDS,
 } from "../../lib/monday.js";
 
+/**
+ * Honesty disclaimer (CODEX finding 19): the skill spec promises an
+ * Outlook/MS Graph check, but no binding decision in decisions/ grants
+ * Marco inbox access yet. Until that decision exists, every lead-check
+ * answer must disclose that it only saw Monday — "has X gotten back to
+ * us?" cannot be answered authoritatively from board data alone.
+ * Remove this (and wire the inbox) only when a written decision lands.
+ */
+const EMAIL_DISCLAIMER = "— from Monday only; I did not check email.";
+
 export async function leadCheck(query: string): Promise<string> {
   if (!query.trim()) {
     return "Which lead? Give me a name.";
   }
+  const answer = await leadCheckFromMonday(query);
+  return `${answer}\n${EMAIL_DISCLAIMER}`;
+}
+
+async function leadCheckFromMonday(query: string): Promise<string> {
 
   const candidates = await fuzzyFindItems(query, {
     limit: 3,

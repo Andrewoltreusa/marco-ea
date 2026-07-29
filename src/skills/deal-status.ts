@@ -15,6 +15,7 @@ import {
   BOARDS,
   type ItemWithColumns,
 } from "../../lib/monday.js";
+import { parseUsd, fmtUsd, AR_COLUMNS } from "../../lib/ar.js";
 
 export async function dealStatus(
   query: string,
@@ -132,6 +133,34 @@ export async function dealStatus(
     sentence2 = "Not on the production schedule yet.";
   }
 
+  // Payment status from the linked AR 2026 item (CODEX finding 19: the
+  // skill spec promises payment status; AR 2026 is the sole financial
+  // source of truth since FreshBooks was removed 2026-04-17).
+  // Tier 1 only — Tier 2 users don't get account-level payment amounts
+  // (slack-allowlist scoping rule). Any failure silently skips the line.
+  let paymentLine = "";
+  if (tier === 1) {
+    try {
+      const arLink = (await getLinkedItems(deal.id)).find(
+        (l) => l.boardId === BOARDS.AR_2026,
+      );
+      if (arLink) {
+        const ar = await getItemWithColumns(arLink.id);
+        if (ar) {
+          const contract = parseUsd(ar.columns[AR_COLUMNS.contract]);
+          const paid =
+            parseUsd(ar.columns[AR_COLUMNS.payment1]) +
+            parseUsd(ar.columns[AR_COLUMNS.payment2]);
+          if (contract > 0 || paid > 0) {
+            paymentLine = `Payments: ${fmtUsd(paid)} of ${fmtUsd(contract)} received.`;
+          }
+        }
+      }
+    } catch {
+      // AR lookup is best-effort — never block the status answer.
+    }
+  }
+
   // Follow-up / context line
   let sentence3 = "";
   if (followUp) sentence3 += `Follow-up: *${followUp}*. `;
@@ -143,6 +172,8 @@ export async function dealStatus(
   }
   if (!sentence3) sentence3 = "No recent updates.";
 
-  const source = `_Source: Monday Deals + OCD Schedule • <${deal.url}|View deal>_`;
-  return [sentence1, sentence2, sentence3.trim(), source].filter(Boolean).join("\n");
+  const source = `_Source: Monday Deals + OCD Schedule${paymentLine ? " + AR 2026" : ""} • <${deal.url}|View deal>_`;
+  return [sentence1, sentence2, paymentLine, sentence3.trim(), source]
+    .filter(Boolean)
+    .join("\n");
 }

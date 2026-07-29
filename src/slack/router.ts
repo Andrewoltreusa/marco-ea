@@ -19,7 +19,11 @@ export type SkillName =
   | "production-eta"
   | "lead-check"
   | "agent-fleet-health"
+  // "find-in-vault" is no longer produced by the classifier (it was only
+  // ever a label for the general-query path — CODEX finding 19). The
+  // member stays so runSkill's compat case still typechecks.
   | "find-in-vault"
+  | "board-stats"
   | "kb-query"
   | "monday-update"
   | "clarify"
@@ -101,21 +105,11 @@ export function classifyIntent(
 
   if (!text) return { skill: "clarify", args: { reason: "empty" } };
 
-  // ─────────────────────────────────────────────────────────
-  // READ-intent overrides — run FIRST, catch "update" as a noun
-  //
-  // These phrasings look like writes to the isWriteIntent regex
-  // because of words like "update" / "note" appearing near board
-  // nouns, but they're read requests. Force them to general-query.
-  // ─────────────────────────────────────────────────────────
-  if (isReadNounIntent(text)) {
-    return { skill: "general-query", args: { query: raw.trim() } };
-  }
-
   // Objection quick-draw — "objection: too expensive" returns the exact
   // 3A script from the sales playbook (KB section 19) in one hop. Built
-  // for Bella mid-call; must run before write-intent so "objection: they
-  // want to log..." never drafts a Monday update.
+  // for Bella mid-call; anchored at ^, so it runs before EVERY other
+  // rule — "objection: they want to log this on the account" must never
+  // draft a Monday update.
   const objMatch = raw.match(/^\s*(?:objection|возражение)\s*[:—–-]?\s*(.+)$/i);
   if (objMatch) {
     return {
@@ -127,6 +121,26 @@ export function classifyIntent(
           `Answer with the script itself, ready to say out loud, not a description of it.`,
       },
     };
+  }
+
+  // Explicit "log on/against <item>" commands — checked BEFORE the
+  // read-noun override so a body that happens to contain "the latest
+  // update" can't get swallowed into the read path. Live incident
+  // 2026-07: "Log on C26100: pickup confirmed" fell through to the read
+  // path and the model then CLAIMED it had logged the note.
+  if (isExplicitLogCommand(text)) {
+    return { skill: "monday-update", args: { query: raw.trim() } };
+  }
+
+  // ─────────────────────────────────────────────────────────
+  // READ-intent overrides — catch "update" as a noun
+  //
+  // These phrasings look like writes to the isWriteIntent regex
+  // because of words like "update" / "note" appearing near board
+  // nouns, but they're read requests. Force them to general-query.
+  // ─────────────────────────────────────────────────────────
+  if (isReadNounIntent(text)) {
+    return { skill: "general-query", args: { query: raw.trim() } };
   }
 
   // ─────────────────────────────────────────────────────────
@@ -145,6 +159,18 @@ export function classifyIntent(
     )
   ) {
     return { skill: "general-query", args: { query: raw.trim() } };
+  }
+
+  // Board-aggregate questions — counted in code by board-stats, never by
+  // the model. Must run BEFORE lead-check ("how many leads replied?"),
+  // BEFORE the `^how` KB rule, and BEFORE the general fallback — CODEX
+  // finding 18: "how many leads do we have?" used to land in kb-query.
+  if (
+    /\bhow many (deals|leads|contacts)\b/i.test(text) ||
+    /\b(deals|leads) (are )?(closing|due|expected)\b/i.test(text) ||
+    /\bcount\b.*\b(deals|leads|contacts)\b/i.test(text)
+  ) {
+    return { skill: "board-stats", args: { query: raw.trim() } };
   }
 
   // Production ETA
@@ -190,9 +216,9 @@ export function classifyIntent(
     return { skill: "deal-status", args: { query: extractSubject(raw) } };
   }
 
-  // KB (process / how-to) — runs BEFORE find-in-vault so process
-  // questions route to the Monday-hosted KB via Opus 4.7 with prompt
-  // caching, instead of falling through to a vault text search.
+  // KB (process / how-to) — runs BEFORE the general fallback so process
+  // questions route to the Monday-hosted KB with prompt caching instead
+  // of falling through to a Monday-wide general query.
   if (
     /\b(how do i|how does|what'?s the process|what'?s our|steps? (to|for)|walk me through|remind me how|procedure|sop|where do i|when should i|cadence|sequence|template|brand voice)\b/i.test(
       raw,
@@ -211,13 +237,11 @@ export function classifyIntent(
     return { skill: "kb-query", args: { query: raw.trim() } };
   }
 
-  // Vault lookup ("what do we know about X")
-  if (/\b(what do we know|vault|find|look up)\b/.test(text)) {
-    return { skill: "find-in-vault", args: { query: extractSubject(raw) } };
-  }
-
-  // Fallback: vault search with the full text as the query
-  return { skill: "find-in-vault", args: { query: raw.trim() } };
+  // Fallback — including "what do we know about X". Routed to
+  // general-query DIRECTLY: the runtime always redirected the old
+  // "find-in-vault" label here anyway (no vault indexer exists — CODEX
+  // finding 19), so the label now says what actually happens.
+  return { skill: "general-query", args: { query: raw.trim() } };
 }
 
 /**
@@ -267,17 +291,51 @@ export function isReadNounIntent(text: string): boolean {
 }
 
 /**
+ * Explicit "log on <item>" / "log this on/against <item>" / "запиши на
+ * <item>" commands. These are unambiguous write requests: the target item
+ * follows the preposition and the body follows the colon/dash. Kept as
+ * its own predicate because classifyIntent must check it BEFORE the
+ * read-noun override (live incident 2026-07: "Log on C26100: pickup
+ * confirmed" misrouted to the read path and the model claimed a write it
+ * never performed).
+ *
+ * The `(?<!\bthe\s)` guard keeps "show me the log on C26100" (a read of
+ * the updates feed) out of the write path.
+ */
+export function isExplicitLogCommand(text: string): boolean {
+  if (
+    /(?<!\bthe\s)\blog\s+(?:this\s+|that\s+|it\s+)?(?:on|against)\s+\S+/i.test(
+      text,
+    )
+  ) {
+    return true;
+  }
+  // Russian: "запиши(те) (это) на C26100: ..." — no \b: JS word
+  // boundaries are ASCII-only and never match next to Cyrillic.
+  if (/запиши(?:те)?\s+(?:это\s+)?на\s+\S+/i.test(text)) {
+    return true;
+  }
+  return false;
+}
+
+/**
  * Heuristic write-intent detector. Catches the common phrasings:
  *   - Explicit commands: "update ... in monday", "add to monday", "log that ...", "note that ..."
+ *   - Targeted log commands: "log on C26100: ...", "log this against C26100"
  *   - Action reports: "I'm meeting X", "spoke with X", "called X", "emailed X", "met with X"
  *   - First-person future actions that imply "record this": "meeting X tomorrow", "calling X friday"
  *
  * Intentionally generous — false positives route to the Claude parser,
  * which returns confidence=0 on non-write messages and the skill falls
  * back to clarify. False NEGATIVES are worse because they silently drop
- * the intent into `find-in-vault`, so we err on catching more.
+ * the intent into the general fallback, so we err on catching more.
  */
 export function isWriteIntent(text: string): boolean {
+  // Targeted "log on/against <item>" commands (also checked earlier in
+  // classifyIntent, before the read-noun override).
+  if (isExplicitLogCommand(text)) {
+    return true;
+  }
   // Explicit write verbs directed at Monday or at Marco
   if (
     /\b(update|add|log|note|record|save|put|post|write|append)\b.{0,30}\b(monday|deal|contact|lead|card|it|this|that)\b/.test(
@@ -349,6 +407,14 @@ export function isWriteIntent(text: string): boolean {
 }
 
 /**
+ * Trailing verb tokens that leak into the naive subject extraction:
+ * "when does Schellenberg ship?" extracts "Schellenberg ship", and the
+ * verb ruins the fuzzy board match (CODEX finding 18).
+ */
+const TRAILING_SUBJECT_VERBS =
+  /\s+(?:ship|shipping|shipped|close|closing|reply|replied)\s*$/i;
+
+/**
  * Pull the "subject" out of a sentence like "what's the status of Schellenberg"
  * → "Schellenberg". Naive but good enough to start.
  */
@@ -356,8 +422,14 @@ function extractSubject(raw: string): string {
   const m = raw.match(
     /(?:status of|up with|going on with|on|for|know about|from|about|does)\s+(.+?)(?:\?|$)/i,
   );
-  if (m && m[1]) return m[1].trim();
-  return raw.trim();
+  const subject = m && m[1] ? m[1].trim() : raw.trim();
+  // Strip trailing verb tokens ("Schellenberg ship" → "Schellenberg"),
+  // but never strip down to an empty subject.
+  let stripped = subject;
+  while (TRAILING_SUBJECT_VERBS.test(stripped)) {
+    stripped = stripped.replace(TRAILING_SUBJECT_VERBS, "").trim();
+  }
+  return stripped.length > 0 ? stripped : subject;
 }
 
 /**
