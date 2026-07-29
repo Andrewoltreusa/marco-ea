@@ -24,7 +24,7 @@
 import { task, logger, tasks } from "@trigger.dev/sdk";
 import { routeInbound, type RoutedRequest } from "../slack/router.js";
 import { nameFor, type Tier } from "../slack/allowlist.js";
-import { postMessage, addReaction, swapReaction } from "../../lib/slack.js";
+import { postMessage, dmUser, addReaction, swapReaction } from "../../lib/slack.js";
 import { claimEvent, redis } from "../../lib/redis.js";
 import { dealStatus } from "../skills/deal-status.js";
 import { productionEta } from "../skills/production-eta.js";
@@ -196,12 +196,27 @@ export const marcoSlackInbound = task({
       response.text = "I wasn't sure how to answer that. Try rephrasing, or ask for a specific deal, lead, or AR breakdown.";
     }
 
-    await postMessage({
-      channel: routed.replyChannel,
-      text: response.text,
-      blocks: response.blocks,
-      thread_ts: routed.threadTs,
-    });
+    try {
+      await postMessage({
+        channel: routed.replyChannel,
+        text: response.text,
+        blocks: response.blocks,
+        thread_ts: routed.threadTs,
+      });
+    } catch (err) {
+      // Channel post failed (classic case: not_in_channel on a mention in
+      // a channel Marco isn't a member of). NEVER go silent — deliver the
+      // answer to the asker's DM with a note explaining why.
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn("channel reply failed — falling back to DM", {
+        channel: routed.replyChannel,
+        error: msg,
+      });
+      await dmUser(
+        payload.slackUserId,
+        `I couldn't reply in <#${routed.replyChannel}> (${msg.includes("not_in_channel") ? "I'm not a member — /invite me there" : msg.slice(0, 80)}). Here's your answer:\n\n${response.text}`,
+      );
+    }
 
     if (canReact) {
       await swapReaction(
