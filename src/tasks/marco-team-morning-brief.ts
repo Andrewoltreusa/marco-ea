@@ -24,6 +24,7 @@
  */
 
 import { schedules, logger } from "@trigger.dev/sdk";
+import { beginTaskBudget } from "../../lib/deadline.js";
 import { anthropic } from "../../lib/anthropic.js";
 import { getBoardItems, BOARDS, type BoardItemRow } from "../../lib/monday.js";
 import { postMessage, dmUser } from "../../lib/slack.js";
@@ -113,12 +114,15 @@ async function saveBriefBestEffort(brief: string): Promise<void> {
   }
 }
 
+const MAX_DURATION_SEC = 120;
+
 export const marcoTeamMorningBrief = schedules.task({
   id: "comms/marco-team-morning-brief",
   // 7:30 AM Pacific, Mon–Fri.
   cron: { pattern: "30 7 * * 1-5", timezone: "America/Los_Angeles" },
-  maxDuration: 120,
+  maxDuration: MAX_DURATION_SEC,
   run: async () => {
+    beginTaskBudget(MAX_DURATION_SEC);
     const dryRun = process.env.DRY_RUN !== "0";
     const today = new Date().toISOString().slice(0, 10);
 

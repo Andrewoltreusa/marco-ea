@@ -8,6 +8,8 @@
  * Oltre HQ automation bot, which Marco must not impersonate).
  */
 
+import { clampMs, remainingMs } from "./deadline.js";
+
 const SLACK_API = "https://slack.com/api";
 
 function token(): string {
@@ -26,8 +28,9 @@ async function call<T = unknown>(
   body: Record<string, unknown>,
   attempt = 0,
 ): Promise<T> {
-  // 10s deadline: a hung Slack call must never eat the task's maxDuration
-  // budget — Trigger kills the run without executing our catches.
+  // 10s deadline, clamped to the run's remaining budget: a hung Slack
+  // call must never eat the task's maxDuration — Trigger kills the run
+  // without executing our catches.
   const res = await fetch(`${SLACK_API}/${method}`, {
     method: "POST",
     headers: {
@@ -35,17 +38,20 @@ async function call<T = unknown>(
       "Content-Type": "application/json; charset=utf-8",
     },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(10_000),
+    signal: AbortSignal.timeout(clampMs(10_000)),
   });
 
-  // One bounded retry on rate limit, honoring Retry-After up to 5s.
+  // One bounded retry on rate limit, honoring Retry-After up to 5s —
+  // only when the budget can absorb the wait plus a minimal retry call.
   if (res.status === 429 && attempt === 0) {
     const waitSec = Math.min(
       parseInt(res.headers.get("retry-after") ?? "1", 10) || 1,
       5,
     );
-    await new Promise((r) => setTimeout(r, waitSec * 1000));
-    return call<T>(method, body, 1);
+    if (remainingMs() > waitSec * 1000 + 3_000) {
+      await new Promise((r) => setTimeout(r, waitSec * 1000));
+      return call<T>(method, body, 1);
+    }
   }
   if (!res.ok) {
     throw new Error(`Slack ${method} HTTP ${res.status}`);

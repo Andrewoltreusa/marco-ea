@@ -10,6 +10,8 @@
  * deploy independence (see decisions/log.md "Outbound Slack client is standalone").
  */
 
+import { clampMs } from "./deadline.js";
+
 const MONDAY_API = "https://api.monday.com/v2";
 
 function token(): string {
@@ -33,9 +35,10 @@ async function graphql<T>(query: string, variables: Record<string, unknown> = {}
       "API-Version": "2025-04",
     },
     body: JSON.stringify({ query, variables }),
-    // 25s deadline — a hung Monday call must fail into our catches, not
-    // eat the task's maxDuration (Trigger kills runs without running them).
-    signal: AbortSignal.timeout(25_000),
+    // 25s deadline, clamped to the run's remaining budget — a hung Monday
+    // call must fail into our catches, not eat the task's maxDuration
+    // (Trigger kills runs without running them).
+    signal: AbortSignal.timeout(clampMs(25_000)),
   });
   const json = (await res.json()) as {
     data?: T;
@@ -50,6 +53,33 @@ async function graphql<T>(query: string, variables: Record<string, unknown> = {}
   }
   if (!json.data) throw new Error("Monday returned no data");
   return json.data;
+}
+
+/**
+ * Failure classification for write attempts. DEFINITIVE means the
+ * mutation provably did not apply: Monday itself answered with an error
+ * envelope, or createItemUpdate's own guards ("create_update:" — empty
+ * body, item not found, board not allowed) threw BEFORE the mutation
+ * request was sent. Anything else (timeout, abort, undici "fetch failed"
+ * thrown for ECONNRESET after the request may already have been sent,
+ * HTTP 5xx bodies that fail to parse) is AMBIGUOUS: the update may have
+ * landed, so only reconciliation against the item's updates feed may
+ * authorize a retry. The prefixes are exactly the ones this module
+ * throws — keep them in sync.
+ */
+const DEFINITIVE_FAILURE_PREFIXES = [
+  "Monday GraphQL error:",
+  "Monday error:",
+  "Monday returned no data",
+  "create_update:",
+] as const;
+
+export type MondayFailureClass = "definitive" | "ambiguous";
+
+export function classifyMondayFailure(message: string): MondayFailureClass {
+  return DEFINITIVE_FAILURE_PREFIXES.some((p) => message.startsWith(p))
+    ? "definitive"
+    : "ambiguous";
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -447,6 +477,48 @@ export async function getItem(itemId: string): Promise<{
   const item = data.items?.[0];
   if (!item) return null;
   return { id: item.id, name: item.name, boardId: item.board.id };
+}
+
+// ─────────────────────────────────────────────────────────────
+// Item updates feed (used by draft reconciliation)
+// ─────────────────────────────────────────────────────────────
+
+export interface ItemUpdate {
+  id: string;
+  text_body: string;
+  created_at: string;
+}
+
+/**
+ * Recent updates on an item, newest first — the reconciliation source of
+ * truth for "did that ambiguous create_update actually land?". Plain
+ * query, bounded by the standard clamped 25s signal in graphql().
+ */
+export async function getItemUpdates(
+  itemId: string,
+  limit = 50,
+): Promise<ItemUpdate[]> {
+  const gql = `
+    query ($id: [ID!]!, $limit: Int!) {
+      items(ids: $id) {
+        updates(limit: $limit) {
+          id
+          text_body
+          created_at
+        }
+      }
+    }
+  `;
+  const data = await graphql<{
+    items: Array<{
+      updates?: Array<{ id: string; text_body: string | null; created_at: string }>;
+    }>;
+  }>(gql, { id: [itemId], limit });
+  return (data.items?.[0]?.updates ?? []).map((u) => ({
+    id: u.id,
+    text_body: u.text_body ?? "",
+    created_at: u.created_at,
+  }));
 }
 
 // ─────────────────────────────────────────────────────────────

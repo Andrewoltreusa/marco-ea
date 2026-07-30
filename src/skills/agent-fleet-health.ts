@@ -14,6 +14,8 @@
  * the fleet is "unknown", not "down".
  */
 
+import { clampMs } from "../../lib/deadline.js";
+
 const DASHBOARD_URL = "https://oltre-dashboard.vercel.app";
 
 interface DashboardState {
@@ -85,6 +87,9 @@ export async function agentFleetHealth(tier: 1 | 2): Promise<string> {
   try {
     const res = await fetch(`${DASHBOARD_URL}/api/state`, {
       headers: { Authorization: `Bearer ${token}` },
+      // 10s deadline, clamped to the run's remaining budget — a hung
+      // dashboard must resolve to "unknown", not a killed run.
+      signal: AbortSignal.timeout(clampMs(10_000)),
     });
     if (!res.ok) {
       return `Dashboard returned HTTP ${res.status}. Fleet status: *unknown*. Try again in a minute.`;

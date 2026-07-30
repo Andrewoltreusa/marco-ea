@@ -9,28 +9,43 @@
  */
 
 import Anthropic from "@anthropic-ai/sdk";
+import { remainingMs } from "./deadline.js";
 
-let _client: Anthropic | null = null;
+/**
+ * Timeout/retry bounds from the run's remaining budget. Pure so vitest
+ * can cover the retry cliff without a live budget: a retry is only worth
+ * paying for when the budget could absorb two full attempts plus SDK
+ * backoff (2.2 × timeout).
+ */
+export function anthropicCallBounds(remaining: number): {
+  timeoutMs: number;
+  maxRetries: 0 | 1;
+} {
+  const timeoutMs = Math.max(3_000, Math.min(45_000, remaining));
+  return { timeoutMs, maxRetries: remaining > 2.2 * timeoutMs ? 1 : 0 };
+}
 
 export function anthropic(): Anthropic {
-  if (_client) return _client;
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
     throw new Error(
       "ANTHROPIC_API_KEY not set. Copy it from oltre-agents env into Marco's Trigger.dev env.",
     );
   }
-  _client = new Anthropic({
+  // SDK defaults are 10-minute timeout × 3 attempts — far beyond any
+  // task's maxDuration, so a hung call gets the run killed before our
+  // never-silent catches execute. The bounds shrink with the remaining
+  // budget (45s × up-to-2 attempts when the run is fresh). No singleton:
+  // client construction is local-only and the timeout must track the
+  // budget at each call site, not the first call of the run.
+  const { timeoutMs, maxRetries } = anthropicCallBounds(remainingMs());
+  return new Anthropic({
     apiKey,
-    // SDK defaults are 10-minute timeout × 3 attempts — far beyond any
-    // task's maxDuration, so a hung call gets the run killed before our
-    // never-silent catches execute. 45s × 2 attempts fits every budget.
-    timeout: 45_000,
-    maxRetries: 1,
+    timeout: timeoutMs,
+    maxRetries,
     // Shared by kb-query's 1h prompt-cache breakpoint; harmless elsewhere.
     defaultHeaders: { "anthropic-beta": "extended-cache-ttl-2025-04-11" },
   });
-  return _client;
 }
 
 export interface WriteIntentParsed {
