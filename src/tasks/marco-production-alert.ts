@@ -32,6 +32,7 @@ import { schedules, logger } from "@trigger.dev/sdk";
 import { getBoardItems, BOARDS, type BoardItemRow } from "../../lib/monday.js";
 import { dmUser } from "../../lib/slack.js";
 import { redis } from "../../lib/redis.js";
+import { beginTaskBudget } from "../../lib/deadline.js";
 import { saveDeliverable } from "../../lib/deliverables.js";
 import { businessDaysBetween, parseIsoDateNoonUtc } from "../../lib/dates.js";
 
@@ -176,15 +177,18 @@ function laHourMinute(): string {
     .replace(":", "-");
 }
 
+const MAX_DURATION_SEC = 60;
+
 export const marcoProductionAlert = schedules.task({
   id: "comms/marco-production-alert",
   // Every 30 min, 7 AM–6 PM Pacific, Mon–Fri.
   cron: { pattern: "*/30 7-18 * * 1-5", timezone: "America/Los_Angeles" },
-  maxDuration: 60,
+  maxDuration: MAX_DURATION_SEC,
   // SKILL.md: never retry inside the same cron slot — the next slot is
   // 30 minutes away anyway.
   retry: { maxAttempts: 1 },
   run: async () => {
+    beginTaskBudget(MAX_DURATION_SEC);
     const dryRun = process.env.DRY_RUN !== "0";
 
     let items: BoardItemRow[];

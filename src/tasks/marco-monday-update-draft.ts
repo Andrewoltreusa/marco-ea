@@ -16,12 +16,18 @@
  *   7. Compose the update body with the requester's enforced signature
  *      (forced for ALL tiers — see comment at the signature step).
  *   8. Post a preview in the requester's DM and capture its Slack `ts`.
- *   9. Store the draft in Redis keyed by that ts.
+ *   9. Store the draft in Redis keyed by that ts, and initialize its
+ *      lifecycle state machine (marco:draft-state:<ts>).
  *
  * Tier 1: 24h Redis TTL — execution without re-confirm allowed ≤12h from
  *         createdAt; 12–24h requires the reaction handler's re-confirm flow.
  * Tier 2: 2h TTL, one active draft at a time.
  * Signature is forced to the requester's own name for BOTH tiers.
+ *
+ * Delivery-terminal lifecycle: the parent leaves the request lifecycle
+ * OPEN and this task closes it (markResponded + outbox done marker) only
+ * after a terminal user-visible reply. If this run dies first, the write
+ * watchdog notices the missing done marker and tells the requester.
  */
 
 import { task, logger } from "@trigger.dev/sdk";
@@ -31,9 +37,25 @@ import { postMessage, openDM, dmUser } from "../../lib/slack.js";
 import {
   redis,
   storeDraft,
-  getActiveDraftForUser,
+  getDraft,
+  markResponded,
+  compareAndDel,
+  userDraftPointerTs,
+  USER_DRAFT_KEY,
   type MondayUpdateDraft,
 } from "../../lib/redis.js";
+import {
+  initDraftState,
+  computeBodyHash,
+  sanitizeSlackMarkup,
+} from "../../lib/draft-state.js";
+import { auditRequest } from "../../lib/audit.js";
+import {
+  outboxDoneKey,
+  outboxStartedKey,
+  OUTBOX_MARKER_TTL_SEC,
+} from "../../lib/outbox.js";
+import { beginTaskBudget } from "../../lib/deadline.js";
 import { tierFor, nameFor } from "../slack/allowlist.js";
 
 export interface MondayUpdateDraftPayload {
@@ -44,28 +66,34 @@ export interface MondayUpdateDraftPayload {
   threadTs?: string;
   /** ts of the original request message — used to resolve the 📝 ack. */
   eventTs?: string;
+  /**
+   * Request lifecycle key (marco:evt:*) — the parent leaves it open;
+   * this task marks it responded after its terminal reply. Null when the
+   * route deploy predates eventTs/eventId.
+   */
+  lifecycleKey?: string | null;
 }
 
 /**
  * Extra fields Marco stores on the draft JSON beyond lib/redis.ts's
- * MondayUpdateDraft. lib/redis.ts is shared and not edited in this wave;
- * storeDraft persists the object verbatim and getDraft returns it back,
- * so extra keys round-trip safely.
- * Keep in sync with the copy in marco-reaction-handler.ts.
+ * MondayUpdateDraft. storeDraft persists the object verbatim and getDraft
+ * returns it back, so extra keys round-trip safely.
+ * Keep in sync with the copy in marco-reaction-handler.ts. The draft is
+ * immutable after storeDraft — mutable lifecycle data (reconfirmedAt,
+ * attempts, …) lives in marco:draft-state:<ts>.
  */
 interface DraftExtras {
   /** Channel of the original request message (for the 📝 → ✅/❌ swap). */
   originChannel?: string;
   /** ts of the original request message. */
   eventTs?: string;
-  /** Set by the reaction handler when Tier 1 re-confirms a >12h draft. */
-  reconfirmedAt?: string;
 }
 
 const CONFIDENCE_THRESHOLD = 0.65;
 
-/** Must match lib/redis.ts's USER_DRAFT_KEY so getActiveDraftForUser stays coherent. */
-const userDraftKey = (slackId: string) => `marco:user-draft:${slackId}`;
+// The Tier-2 slot key is lib/redis.ts's USER_DRAFT_KEY — imported, not
+// duplicated, so the reservation and the stored pointer can never drift.
+const userDraftKey = USER_DRAFT_KEY;
 
 const mondayItemUrl = (boardId: string, itemId: string) =>
   `https://oregonfivestar-company.monday.com/boards/${boardId}/pulses/${itemId}`;
@@ -79,34 +107,95 @@ function shortName(full: string): string {
   return full;
 }
 
+/** The reservation sentinel this run writes into the Tier-2 slot. */
+const reservingToken = (runId: string) => `reserving:${runId}`;
+
 /**
- * Release the Tier-2 one-draft slot IF it still holds our "reserving"
- * sentinel. Conditional so we never clobber a real draft pointer written
- * by storeDraft (ours or a concurrent run's). Best-effort — the 120s
+ * Release the Tier-2 one-draft slot IF it still holds THIS run's
+ * reserving token — atomic compare-and-del, so a losing racer can never
+ * release the winner's live reservation, and a real draft pointer
+ * written by storeDraft is never clobbered. Best-effort — the 120s
  * reservation TTL is the backstop if this fails.
  */
-async function releaseTier2Slot(slackId: string): Promise<void> {
+async function releaseTier2Slot(slackId: string, runId: string): Promise<void> {
   try {
-    const key = userDraftKey(slackId);
-    const current = await redis().get(key);
-    if (current === "reserving") {
-      await redis().del(key);
-    }
+    await compareAndDel(userDraftKey(slackId), [reservingToken(runId)]);
   } catch (err) {
     logger.warn("could not release tier-2 draft slot", { err: String(err) });
   }
 }
 
+const MAX_DURATION_SEC = 60;
+
+/**
+ * Terminal bookkeeping — called ONLY after a terminal user-visible reply
+ * (or the deliberate bad-tier silence): closes the request lifecycle so
+ * Slack redeliveries stay deduped, and sets the outbox done marker so
+ * the watchdog knows this delegation finished. Keyed by lifecycleKey,
+ * falling back to the run id for legacy payloads without one (the
+ * watchdog applies the same fallback).
+ */
+async function finalizeDelivery(
+  lifecycleKey: string | null | undefined,
+  runId: string,
+): Promise<void> {
+  if (lifecycleKey) await markResponded(lifecycleKey);
+  try {
+    await redis().set(outboxDoneKey(lifecycleKey ?? runId), 1, {
+      ex: OUTBOX_MARKER_TTL_SEC,
+    });
+  } catch (err) {
+    // markResponded above still dedups; worst case the watchdog
+    // false-alarms once for a request that was actually answered.
+    logger.warn("outbox done marker failed", { err: String(err) });
+  }
+}
+
 export const marcoMondayUpdateDraft = task({
   id: "comms/marco-monday-update-draft",
-  maxDuration: 60,
+  maxDuration: MAX_DURATION_SEC,
   // Never retry: a retry would post a second preview DM (and a second
   // Redis draft) for the same request. The in-task catch already tells
   // the user when drafting fails.
   retry: { maxAttempts: 1 },
-  run: async (payload: MondayUpdateDraftPayload) => {
+  run: async (payload: MondayUpdateDraftPayload, { ctx }) => {
+    beginTaskBudget(MAX_DURATION_SEC);
+    // Started marker FIRST: tells the watchdog "the child got scheduled"
+    // apart from "still queue-delayed" — a run that dies after this point
+    // is declared lost at 5 minutes instead of 30.
     try {
-      return await runDraft(payload);
+      await redis().set(
+        outboxStartedKey(payload.lifecycleKey ?? ctx.run.id),
+        1,
+        { ex: OUTBOX_MARKER_TTL_SEC },
+      );
+    } catch (err) {
+      // Watchdog falls back to the 30-min queue-delay threshold.
+      logger.warn("outbox started marker failed", { err: String(err) });
+    }
+    const startedAt = Date.now();
+    // Terminal audit for the write path lives HERE, not in the parent —
+    // ok means the preview/clarify/error reply was actually delivered.
+    const audit = (ok: boolean) =>
+      auditRequest({
+        ts: new Date().toISOString(),
+        eventId: payload.lifecycleKey ?? null,
+        user: payload.requesterSlackId,
+        tier: tierFor(payload.requesterSlackId),
+        skill: "monday-update",
+        ok,
+        ms: Date.now() - startedAt,
+      });
+
+    try {
+      const result = await runDraft(payload, ctx.run.id);
+      // Every non-throw return of runDraft is terminal: either a reply
+      // was delivered or (bad_tier) silence was deliberate — both must
+      // close the lifecycle, or the watchdog would tell a non-allowlisted
+      // user to resend.
+      await finalizeDelivery(payload.lifecycleKey, ctx.run.id);
+      await audit(result.delivered);
+      return result;
     } catch (err) {
       // Catch-all so Marco never goes silent. If anything in the draft
       // pipeline throws (Claude, Monday API, Redis, Slack), post a
@@ -115,16 +204,19 @@ export const marcoMondayUpdateDraft = task({
       logger.error("draft pipeline threw", { error: msg });
 
       // Free the Tier-2 slot if we died while holding the reservation
-      // (no-op for Tier 1 / when the slot holds a real draft pointer).
-      await releaseTier2Slot(payload.requesterSlackId);
+      // (no-op for Tier 1 / when the slot holds a real draft pointer or
+      // another run's token).
+      await releaseTier2Slot(payload.requesterSlackId, ctx.run.id);
 
       const errText =
         `I hit a snag drafting that update: ${msg.slice(0, 200)}. ` +
         `Try rephrasing with the exact item name, or just tell me the deal code directly (e.g. "log on C26079: ...").`;
       // Error goes to the requester's DM when reachable (the draft flow
       // lives there); fall back to the channel the request came from.
+      let delivered = false;
       try {
         await dmUser(payload.requesterSlackId, errText);
+        delivered = true;
       } catch {
         try {
           await postMessage({
@@ -132,17 +224,24 @@ export const marcoMondayUpdateDraft = task({
             text: errText,
             thread_ts: payload.threadTs,
           });
+          delivered = true;
         } catch {
           // if even postMessage fails, there's nothing more we can do;
           // the logger.error above ensures the Trigger.dev run records it.
         }
       }
-      return { ok: false, reason: "draft_pipeline_error", error: msg };
+      // Only a DELIVERED error reply closes the lifecycle — if the user
+      // saw nothing, leave it open so the watchdog tells them to resend.
+      if (delivered) {
+        await finalizeDelivery(payload.lifecycleKey, ctx.run.id);
+      }
+      await audit(false);
+      return { ok: false, reason: "draft_pipeline_error", error: msg, delivered };
     }
   },
 });
 
-async function runDraft(payload: MondayUpdateDraftPayload) {
+async function runDraft(payload: MondayUpdateDraftPayload, runId: string) {
   // ─── Re-derive tier + name from the compiled allowlist ─────
   // The payload crosses the Trigger.dev API and can be forged from the
   // dashboard — requesterName/requesterTier were removed from the payload
@@ -152,7 +251,8 @@ async function runDraft(payload: MondayUpdateDraftPayload) {
     logger.warn("draft request from non-allowlisted user", {
       user: payload.requesterSlackId,
     });
-    return { ok: true, ignored: "bad_tier" };
+    // Deliberate silence for non-allowlisted requesters — still terminal.
+    return { ok: true, ignored: "bad_tier", delivered: false };
   }
   const fullName = nameFor(payload.requesterSlackId) ?? payload.requesterSlackId;
 
@@ -165,32 +265,69 @@ async function runDraft(payload: MondayUpdateDraftPayload) {
   // ─── Tier 2 one-active-draft enforcement (atomic) ──────────
   // NX-reserve the same key lib/redis.ts uses for the user-draft pointer,
   // BEFORE the (slow) Claude parse — two rapid-fire requests can no longer
-  // both pass a read-then-check race. storeDraft overwrites the sentinel
-  // with the real preview ts on success; every failure path below releases it.
+  // both pass a read-then-check race. The token carries this run's id so
+  // a live reservation (another run mid-draft) BLOCKS instead of being
+  // treated as stale, and release can never delete another run's token.
+  // storeDraft overwrites the token with the real pointer on success.
   if (tier === 2) {
-    const reserved = await redis().set(
-      userDraftKey(payload.requesterSlackId),
-      "reserving",
-      { nx: true, ex: 120 },
-    );
-    if (reserved !== "OK") {
-      const existing = await getActiveDraftForUser(payload.requesterSlackId);
-      if (existing) {
-        await postMessage({
-          channel: payload.replyChannel,
-          text:
-            `You already have a pending draft for *${existing.monday.itemName}* (${existing.monday.boardName}). ` +
-            `React ✅ or ❌ on that preview first, then ask me for the next one.`,
-          thread_ts: payload.threadTs,
-        });
-        return { ok: true, reason: "existing_draft", previewTs: existing.previewTs };
-      }
-      // Slot key exists but no live draft behind it → stale reservation
-      // from a crashed run. Proceed; the 120s TTL clears it and storeDraft
-      // will overwrite it on success.
-      logger.info("stale tier-2 reservation — proceeding", {
-        user: payload.requesterSlackId,
+    const key = userDraftKey(payload.requesterSlackId);
+    const token = reservingToken(runId);
+    const busyReply = async () => {
+      await postMessage({
+        channel: payload.replyChannel,
+        text: "I'm already drafting your previous request — give me a minute.",
+        thread_ts: payload.threadTs,
       });
+      return { ok: true, reason: "draft_in_flight", delivered: true } as const;
+    };
+
+    let reserved = await redis().set(key, token, { nx: true, ex: 120 });
+    if (reserved !== "OK") {
+      const slot = await redis().get(key);
+      if (typeof slot === "string" && slot.startsWith("reserving")) {
+        // Another run of this user's is drafting right now. Its 120s TTL
+        // (or its own release) frees the slot; never steal a live token.
+        return busyReply();
+      }
+      if (slot === null) {
+        // Expired between SET NX and GET — one retry.
+        reserved = await redis().set(key, token, { nx: true, ex: 120 });
+        if (reserved !== "OK") return busyReply();
+      } else {
+        // Real pointer: is there still a draft behind it?
+        const previewTs = userDraftPointerTs(slot);
+        const existing = previewTs ? await getDraft(previewTs) : null;
+        if (existing) {
+          await postMessage({
+            channel: payload.replyChannel,
+            text:
+              `You already have a pending draft for *${existing.monday.itemName}* (${existing.monday.boardName}). ` +
+              `React ✅ or ❌ on that preview first, then ask me for the next one.`,
+            thread_ts: payload.threadTs,
+          });
+          return {
+            ok: true,
+            reason: "existing_draft",
+            previewTs: existing.previewTs,
+            delivered: true,
+          };
+        }
+        // Dead pointer (draft expired/deleted): clear it only if it still
+        // holds the exact value we read, then take the slot.
+        const rawForms: string[] = [
+          typeof slot === "object" ? JSON.stringify(slot) : String(slot),
+        ];
+        if (previewTs) {
+          rawForms.push(JSON.stringify({ ts: previewTs }), previewTs);
+        }
+        try {
+          await compareAndDel(key, rawForms);
+        } catch (err) {
+          logger.warn("dead-pointer clear failed", { err: String(err) });
+        }
+        reserved = await redis().set(key, token, { nx: true, ex: 120 });
+        if (reserved !== "OK") return busyReply();
+      }
     }
   }
 
@@ -204,7 +341,7 @@ async function runDraft(payload: MondayUpdateDraftPayload) {
   });
 
   if (parsed.confidence < CONFIDENCE_THRESHOLD || !parsed.target || !parsed.content) {
-    if (tier === 2) await releaseTier2Slot(payload.requesterSlackId);
+    if (tier === 2) await releaseTier2Slot(payload.requesterSlackId, runId);
     await postMessage({
       channel: payload.replyChannel,
       text:
@@ -218,6 +355,7 @@ async function runDraft(payload: MondayUpdateDraftPayload) {
       reason: "low_confidence",
       confidence: parsed.confidence,
       rawClaudeResponse: parsed._raw ?? "(clean)",
+      delivered: true,
     };
   }
 
@@ -238,7 +376,7 @@ async function runDraft(payload: MondayUpdateDraftPayload) {
   });
 
   if (candidates.length === 0) {
-    if (tier === 2) await releaseTier2Slot(payload.requesterSlackId);
+    if (tier === 2) await releaseTier2Slot(payload.requesterSlackId, runId);
     await postMessage({
       channel: payload.replyChannel,
       text:
@@ -246,7 +384,7 @@ async function runDraft(payload: MondayUpdateDraftPayload) {
         `Try the full company name, or tell me which board it's on (e.g. "log on C26079: ...").`,
       thread_ts: payload.threadTs,
     });
-    return { ok: true, reason: "no_match", target: parsed.target };
+    return { ok: true, reason: "no_match", target: parsed.target, delivered: true };
   }
 
   // ─── Tie-break (hardened) ────────────────────────────────
@@ -260,7 +398,7 @@ async function runDraft(payload: MondayUpdateDraftPayload) {
   const confident = gap >= 0.1 && (gap >= 0.2 || top.score >= 0.9);
 
   if (!confident) {
-    if (tier === 2) await releaseTier2Slot(payload.requesterSlackId);
+    if (tier === 2) await releaseTier2Slot(payload.requesterSlackId, runId);
     // Each candidate must be distinguishable: name, board, and a direct
     // Monday link so the requester can open the exact card.
     const list = candidates
@@ -277,7 +415,12 @@ async function runDraft(payload: MondayUpdateDraftPayload) {
         `Tell me which by number, or use the full name.`,
       thread_ts: payload.threadTs,
     });
-    return { ok: true, reason: "ambiguous_match", candidates: candidates.length };
+    return {
+      ok: true,
+      reason: "ambiguous_match",
+      candidates: candidates.length,
+      delivered: true,
+    };
   }
 
   // ─── Compose update body with enforced signature ──────────
@@ -287,17 +430,21 @@ async function runDraft(payload: MondayUpdateDraftPayload) {
   // until then Andrew gets the same forced "— Andrew via Marco".
   // Strip any attribution line smuggled into the parsed content so a user
   // can't fake someone else's "via Marco" signature in the body.
-  const strippedContent = parsed.content
+  // sanitizeSlackMarkup first: Slack auto-wraps every URL in <...> and
+  // Monday's HTML sanitizer strips tag-like tokens from stored updates —
+  // the stored body must be sanitizer-stable so preview text == what
+  // Monday stores == what reconciliation compares (double-post guard).
+  const strippedContent = sanitizeSlackMarkup(parsed.content)
     .replace(/(^|\n)\s*[—–-]\s*.{0,40}via Marco.*$/gim, "")
     .trim();
   if (!strippedContent || /via Marco/i.test(strippedContent)) {
-    if (tier === 2) await releaseTier2Slot(payload.requesterSlackId);
+    if (tier === 2) await releaseTier2Slot(payload.requesterSlackId, runId);
     await postMessage({
       channel: payload.replyChannel,
       text: "I can't include attribution text in the update body — rephrase without it.",
       thread_ts: payload.threadTs,
     });
-    return { ok: true, reason: "attribution_in_body" };
+    return { ok: true, reason: "attribution_in_body", delivered: true };
   }
 
   const name = shortName(fullName);
@@ -358,14 +505,15 @@ async function runDraft(payload: MondayUpdateDraftPayload) {
   };
   await storeDraft(draft);
 
-  if (tier === 1) {
-    // lib/redis.ts's storeDraft sets a 12h TTL for Tier 1 (shared file —
-    // not edited in this wave). Wave-1 semantics: the draft LIVES 24h in
-    // Redis; execution without re-confirm is allowed only ≤12h from
-    // createdAt, and a ✅ between 12h and 24h triggers the reaction
-    // handler's re-confirm flow. Extend the TTL here so the 12–24h
-    // re-confirm window is actually reachable.
-    await redis().expire(`marco:draft:${posted.ts}`, 24 * 60 * 60);
+  // Lifecycle state machine: pending, keyed by the preview ts. The
+  // reaction handler lazily initializes this if it's missing, so a
+  // failure here must not kill a draft that already stored fine.
+  try {
+    await initDraftState(posted.ts, computeBodyHash(top.id, updateBody));
+  } catch (err) {
+    logger.warn("initDraftState failed — reaction handler will lazy-init", {
+      err: String(err),
+    });
   }
 
   // If the request came from a channel/mention rather than this DM, leave
@@ -385,5 +533,11 @@ async function runDraft(payload: MondayUpdateDraftPayload) {
     }
   }
 
-  return { ok: true, draftStored: true, previewTs: posted.ts, itemName: top.name };
+  return {
+    ok: true,
+    draftStored: true,
+    previewTs: posted.ts,
+    itemName: top.name,
+    delivered: true,
+  };
 }

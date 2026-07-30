@@ -24,7 +24,10 @@
 import { task, logger, tasks } from "@trigger.dev/sdk";
 import { routeInbound, type RoutedRequest } from "../slack/router.js";
 import { postMessage, dmUser, addReaction, swapReaction } from "../../lib/slack.js";
-import { beginRequest, markResponded, redis } from "../../lib/redis.js";
+import { beginRequest, markResponded, markDelegated, redis } from "../../lib/redis.js";
+import { auditRequest } from "../../lib/audit.js";
+import { pushOutboxEntry } from "../../lib/outbox.js";
+import { beginTaskBudget } from "../../lib/deadline.js";
 import { isFinancialQuestion } from "../skills/general-query.js";
 import { dealStatus } from "../skills/deal-status.js";
 import { productionEta } from "../skills/production-eta.js";
@@ -48,15 +51,19 @@ export interface NormalizedSlackEvent {
   eventId?: string;
 }
 
+// 120s: heavy financial/KB queries could breach the old 60s cap and
+// trigger platform retries.
+const MAX_DURATION_SEC = 120;
+
 export const marcoSlackInbound = task({
   id: "comms/marco-slack-inbound",
-  // 120s: heavy financial/KB queries could breach the old 60s cap and
-  // trigger platform retries. maxAttempts 1 because a retry re-runs the
-  // whole pipeline and can double-post — the in-code never-silent catch
-  // already turns failures into an error reply.
-  maxDuration: 120,
+  maxDuration: MAX_DURATION_SEC,
+  // maxAttempts 1 because a retry re-runs the whole pipeline and can
+  // double-post — the in-code never-silent catch already turns failures
+  // into an error reply.
   retry: { maxAttempts: 1 },
   run: async (payload: NormalizedSlackEvent & { __probe?: boolean }) => {
+    beginTaskBudget(MAX_DURATION_SEC);
     const startedAt = Date.now();
 
     // Diagnostic probe — the Vercel route GET handler uses this to verify
@@ -91,8 +98,10 @@ export const marcoSlackInbound = task({
     const canReact = payload.source !== "slash_command" && !!payload.eventTs;
 
     // Durable request audit (CODEX finding 32) — one bounded record per
-    // handled request, on every delivery path including errors. Strictly
-    // best-effort: an audit failure must never affect the reply.
+    // handled request. The write path is the exception: the CHILD writes
+    // the terminal record (it delivers the reply); the parent audits only
+    // enqueue failure. Strictly best-effort: an audit failure must never
+    // affect the reply.
     const audit = (ok: boolean) =>
       auditRequest({
         ts: new Date().toISOString(),
@@ -106,6 +115,7 @@ export const marcoSlackInbound = task({
 
     if (routed.skill === "refuse") {
       await logAccessDenial(payload, routed);
+      let posted = false;
       if (!routed.rateLimited) {
         try {
           await postMessage({
@@ -113,14 +123,17 @@ export const marcoSlackInbound = task({
             text: routed.args.text ?? "Refused.",
             thread_ts: routed.threadTs,
           });
+          posted = true;
         } catch (err) {
           logger.warn("tier-3 refusal post failed", {
             error: err instanceof Error ? err.message : String(err),
           });
         }
       }
-      await audit(true);
-      return { ok: true, tier: 3, posted: !routed.rateLimited };
+      // ok = the actual outcome: rate-limited silence is deliberate, a
+      // failed refusal post is not.
+      await audit(!!routed.rateLimited || posted);
+      return { ok: true, tier: 3, posted };
     }
 
     // Everything below is an authorized (Tier 1/2) request. The outer
@@ -174,18 +187,43 @@ export const marcoSlackInbound = task({
             replyChannel: routed.replyChannel,
             threadTs: routed.threadTs,
             eventTs: payload.eventTs,
+            lifecycleKey,
           });
           logger.info("monday-update delegated", {
             user: payload.slackUserId,
             runId: triggered.id,
           });
+          // Lifecycle stays OPEN but flips to the delegated phase: the
+          // child can legitimately take minutes (queue + its 60s budget),
+          // so a Slack redelivery must use the 15-min staleness threshold
+          // instead of 120s — otherwise it would take over a request whose
+          // child is alive and duplicate the preview. The child marks it
+          // responded after its terminal reply and writes the terminal
+          // audit record.
+          if (lifecycleKey) await markDelegated(lifecycleKey);
+          // The outbox entry lets the watchdog catch a child that dies
+          // before replying.
+          try {
+            await pushOutboxEntry({
+              lifecycleKey,
+              childRunId: triggered.id,
+              requester: payload.slackUserId,
+              channel: routed.replyChannel,
+              eventTs: payload.eventTs ?? null,
+              ts: new Date().toISOString(),
+            });
+          } catch (outboxErr) {
+            // Same Redis outage would break the lifecycle anyway — the
+            // enqueue itself succeeded, so don't fail the request.
+            logger.warn("outbox push failed — watchdog blind for this delegation", {
+              error: outboxErr instanceof Error ? outboxErr.message : String(outboxErr),
+            });
+          }
           // 📝 = "drafting" — the child resolves this emoji when the draft
           // is approved (✅) or rejected (❌).
           if (canReact) {
             await swapReaction(payload.channel, payload.eventTs!, "eyes", "memo");
           }
-          if (lifecycleKey) await markResponded(lifecycleKey);
-          await audit(true);
           return {
             ok: true,
             tier: routed.tier,
@@ -395,34 +433,6 @@ async function runSkill(
       return { text: await generalQuery(q, tier, ch) };
     default:
       return { text: await generalQuery(q || "help", tier, ch) };
-  }
-}
-
-/**
- * Durable per-request audit record (CODEX finding 32). One JSON entry per
- * handled request — refusals, drafts, reads, and failures alike — newest
- * first, capped at 1000. Read back: LRANGE marco:audit:requests 0 -1
- *
- * Strictly best-effort: any Redis failure is logged and swallowed so the
- * audit can never affect a reply that was already delivered.
- */
-async function auditRequest(rec: {
-  ts: string;
-  eventId: string | null;
-  user: string;
-  tier: number;
-  skill: string;
-  ok: boolean;
-  ms: number;
-}): Promise<void> {
-  try {
-    const r = redis();
-    await r.lpush("marco:audit:requests", JSON.stringify(rec));
-    await r.ltrim("marco:audit:requests", 0, 999);
-  } catch (err) {
-    logger.warn("request audit failed", {
-      error: err instanceof Error ? err.message : String(err),
-    });
   }
 }
 

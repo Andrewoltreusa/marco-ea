@@ -38,6 +38,7 @@
  */
 
 import { redis } from "./redis.js";
+import { clampMs } from "./deadline.js";
 
 const MONDAY_API = "https://api.monday.com/v2";
 
@@ -66,8 +67,9 @@ async function mondayGraphql<T>(
       "API-Version": "2025-04",
     },
     body: JSON.stringify({ query, variables }),
-    // 25s deadline — see lib/monday.ts graphql() for rationale.
-    signal: AbortSignal.timeout(25_000),
+    // 25s deadline, clamped to the run's remaining budget — see
+    // lib/monday.ts graphql() for rationale.
+    signal: AbortSignal.timeout(clampMs(25_000)),
   });
   const json = (await res.json()) as {
     data?: T;
