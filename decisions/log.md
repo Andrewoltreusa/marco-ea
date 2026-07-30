@@ -4,6 +4,71 @@ Append-only record of architectural and trust decisions. Every entry: date, deci
 
 ---
 
+## 2026-07-30 — Wave 5: exactly-once write path (second Codex audit, P0s)
+
+A second cross-repo Codex audit re-verified all 36 findings against the
+shipped Waves 1–4: none fully closed, three residual P0s in the write path.
+Every finding was re-verified in code by independent agents before fixing:
+30 confirmed (several worse than written), 1 partial, 2 refuted — notably
+**Monday API 2025-04 is inside the live maintenance matrix** (checked
+against the API itself; the audit's "outside the stable matrix" claim was
+false, so no version bump shipped).
+
+**The draft state machine (lib/draft-state.ts).** One atomic Lua CAS record
+per draft: pending → executing|cancelled → posted|unknown, 48h TTL. Approve
+and cancel are mutually exclusive by construction; the 300s exec claim,
+done-marker, and never-read outcome keys are gone. Ambiguous Monday
+failures (timeouts, 5xx, undici "fetch failed") park the draft in
+`unknown`; the ONLY exit into a retry is reconciliation — querying the
+item's updates for the draft body (sanitizer-aware normalization on both
+sides) — gated by a 120s cool-down against Monday's late commits. The
+Tier-1 re-confirm stamp lives in the state record, killing the
+SET+KEEPTTL bug that could resurrect a cancelled draft with no TTL.
+Tier-1 draft TTL fixed 12h → 24h, so the documented 12–24h re-confirm
+window exists for the first time. Replay-proof: reaction events carry
+eventId/eventTs; a replayed first-✅ can never satisfy the second-✅.
+
+**Deadline propagation (lib/deadline.ts).** Every task stamps its budget;
+every Anthropic/Monday/Slack/dashboard call clamps its timeout to the
+remaining budget; retries only happen when they fit. Reaction handler
+maxDuration 30 → 120 (it now fits a write + reconciliation + replies).
+
+**Delivery-terminal lifecycle.** Write-path requests are marked responded
+by the CHILD after the preview/clarify/error actually reaches the user —
+never at enqueue. A durable outbox + marco-write-watchdog (sixth task,
+cron */10) sweeps delegations: done markers clear entries; a child that
+started but never finalized is reported to the requester with honest
+ambiguity ("if I sent you a preview, react there; if not, resend") and to
+Andrew. Stale-claim takeover is a Lua CAS; delegated requests get a
+15-minute stale threshold so Slack retries can't mint duplicate previews.
+
+**Route hardening (oltre-dashboard ef880b4).** Reaction dedupe keys on
+Slack event_id (remove/re-add works — required by the re-confirm flow);
+MARCO_TRIGGER_SECRET_KEY / MARCO_SLACK_TEAM_ID / MARCO_BOT_USER_ID are
+fail-closed required config; explicit self-reaction filter; enqueue
+failures return 503 so Slack retries (safe via event_id idempotency).
+
+**Process.** Implemented on branch wave-5, adversarially reviewed by a
+three-lens panel BEFORE deploy (verdict fix-then-ship; both blockers —
+reconciliation blind to Monday's HTML sanitization, zero cool-down retry
+— plus 8 should-fixes were applied), PR #1 through CI (which needed a
+fetch-depth fix for gitleaks on PRs), merged 9dc9b83, deployed
+v20260730.1 (6 tasks). Tests 29 → 119.
+
+**Acceptance battery (all 7 against production).** Double-✅ → one update +
+already_processing. ✅/❌ race → posted + executing_cannot_cancel, one
+outcome. Forced-unknown reconciliation: found → verified already-posted,
+no repost; fresh absent → settling (cool-down); aged absent → exactly one
+retry post. Re-✅ 7 minutes after execution (draft key present — the old
+double-post case) → already_posted. 13h-old draft through the production
+route: first ✅ → re-confirm ask, second ✅ → posted once. Same event_id
+delivered 3× → one run. Forged dead child → watchdog: lost=1, outbox
+drained, lifecycle key cleared, delegation_lost incident, honest DM.
+Test updates on C26100 (Monday) are prefixed with ordinary sentences and
+signed "— Andrew via Marco"; Andrew may delete them from the item feed.
+
+---
+
 ## 2026-07-29 (evening) — Wave 4: product correctness (routing, honesty, voice, audit)
 
 Final wave of the Codex-findings remediation (findings 18, 19, 28–33).
