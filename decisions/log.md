@@ -4,6 +4,61 @@ Append-only record of architectural and trust decisions. Every entry: date, deci
 
 ---
 
+## 2026-07-30 (evening) — Wave 6: P1 remediation (read-path discipline, ops honesty, docs truth)
+
+Closes the second audit's P1 class. Three disjoint work streams, all
+findings re-verified in code before fixing. Deployed v20260731.2
+(6 tasks), merged as PR #2. Tests 119 → 187.
+
+**Read-path data discipline.** Tier-2 financial redaction is now CODE,
+not a prompt instruction: lib/tier-redact.ts excludes AR 2026 rows from
+Tier-2 entity matches before hydration and strips financial columns
+before prompt assembly; aggregates + top-5 outstanding remain the
+sanctioned Tier-2 view; Tier-2 KB access is recorded as accepted policy
+(the KB is team process documentation). Truncated AR reads now say so in
+the prompt instead of claiming "all items". One shared resolveCandidates
+policy (min-score 0.3, tie-margin 0.15, exact-score ties ALWAYS
+disambiguate) replaces three copy-pasted guards — two items named
+identically can no longer silently auto-select, and a lone weak token
+match no longer answers as if certain. board-stats handles "next week"
+by shifted ISO week and refuses other timeframes explicitly rather than
+serving a confident whole-board count. KB completeness validation grew
+teeth: >= 20 distinct numbered sections AND the section-24 tail sentinel
+(the old section-17 sentinel would have passed a KB truncated at 70%),
+cached entries re-validate on read, and the LKG refresh is awaited
+within the task budget behind a lock released in finally.
+
+**Scheduled-task correctness.** Production-alert ship-date state is
+two-phase: detection is read-only; a slip's stored date advances only
+after every owed DM landed, so a failed DM re-detects next run instead
+of being swallowed forever. DRY_RUN keeps shadow prodship state
+(a dry-run slip observation no longer consumes the real event).
+Morning-brief output is numerically grounded: every dollar amount and
+count in the composed brief must match the code-computed facts block or
+the run falls back to raw facts.
+
+**Policy + ops honesty.** The Tier-3 one-refusal-per-24h rule is finally
+enforced durably (Redis SET NX EX 86400; the in-memory Map is demoted to
+fallback; the router comment falsely claiming Redis backing is fixed;
+the denial log records the action actually taken). E2E-verified across
+two separate runs: first message → refusal attempted, second → silence,
+key TTL ~24h. KB fallback to general-query now discloses itself
+("KB lookup unavailable — answering from Monday data only.").
+
+**Hygiene.** The dashboard API token literal is scrubbed from
+COMPANY.md, the morning-brief SKILL.md, and the 2026-04-15 phase-3
+decisions file (annotated; history not rewritten — rotation is the
+load-bearing fix and remains on Andrew). README/STATUS/AGENTS/SKILL.md
+went through a truth pass: six real tasks, Tier-2 write capability per
+the binding allowlist, spec-only skills labeled, staging claims gone.
+
+**Deliberately not fixed:** the Monday API 2025-04 pin — the audit
+claimed it was outside the supported matrix; a live check against the
+API showed it is served verbatim (maintenance line through 2026-07
+current). Optional runway bump deferred until Monday actually rotates.
+
+---
+
 ## 2026-07-30 — Wave 5: exactly-once write path (second Codex audit, P0s)
 
 A second cross-repo Codex audit re-verified all 36 findings against the

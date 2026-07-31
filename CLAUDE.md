@@ -53,10 +53,15 @@ I am **Marco**, Oltre Castings & Design's company secretary. This file routes an
 
 **Runtime state lives in Upstash Redis, not local folders** — Trigger.dev cloud's filesystem is ephemeral. Key map:
 - `marco:deliverable:<date>-<name>` — scheduled-skill outputs (morning brief, alerts), 30-day TTL
-- `marco:draft:*` / `marco:user-draft:*` — Level-2 draft state
+- `marco:draft:*` / `marco:user-draft:*` — Level-2 draft state (draft JSON is immutable after store)
+- `marco:draft-state:<previewTs>` — draft lifecycle state machine (pending→executing|cancelled→posted|unknown), Lua CAS only, 48h TTL
 - `marco:log:access-denials` / `marco:log:write-incidents` — audit trails (LRANGE to read)
-- `marco:prodalert:*` — production-alert de-dup state
-- `marco:evt:*` — inbound-event dedup
+- `marco:audit:requests` — per-request audit records, capped 1000
+- `marco:prodalert:*` / `marco:prodship:*` (+ `-dry` variants) — production-alert de-dup + ship-date state
+- `marco:evt:*` — request lifecycle (processing/delegated/responded)
+- `marco:outbox:write-delegations` + `marco:outbox-started/done:*` — write-watchdog ledger
+- `marco:tier3:refused:<userId>` — durable Tier-3 one-refusal-per-24h window
+- `marco:kb:v1` / `marco:kb:lkg` / `marco:kb:refresh-lock` — KB cache, 7d last-known-good, single-flight
 
 (The old `memory/`, `deliverables/`, `projects/drafts/` folders were never reachable from the cloud runtime and stay empty.)
 
