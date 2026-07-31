@@ -4,7 +4,46 @@ Append-only record of architectural and trust decisions. Every entry: date, deci
 
 ---
 
-## 2026-07-30 (evening) — Wave 6: P1 remediation (read-path discipline, ops honesty, docs truth)
+## 2026-07-31 — Two standing decisions closed; post-rotation repair; Monday pin bumped
+
+**Tier-1 signature: enforcement stays for every tier, Andrew included.**
+Andrew's words: "Should still have my signature." The Phase-6a
+signature-freedom clause is deleted from the allowlist and the code
+comments — the signature is what keeps a Marco-written update
+identifiable in a Monday feed that several systems write to; exempting
+the owner would destroy that audit value. The allowlist Tier-1 section
+now also states the real TTL contract (24h with the 12h re-confirm gate).
+
+**Broadcast: DRY_RUN=0 as of today; APPROVED_CHANNELS stays empty for one
+week.** The morning brief now runs live against real data into Andrew's
+DM only. Wave 6 grounded the brief's numbers in tests; seven real
+mornings prove it in production. **Review date: 2026-08-07** — after a
+week of correct briefs Andrew names a channel and it goes into the
+code-side APPROVED_CHANNELS constant. This entry exists so the DM-only
+state cannot quietly become permanent.
+
+**Post-rotation repair (same day).** Andrew rotated the Slack bot token,
+dashboard API token, and Trigger prod key. Vercel's copies of
+MARCO_TRIGGER_SECRET_KEY and MARCO_SLACK_BOT_TOKEN were still the old
+values — every Slack event bounced 503 from rotation until the sync
+(visible failure courtesy of Wave 5's fail-loud enqueue; pre-Wave-5 this
+would have been silent). Both synced from Marco/.env and production
+redeployed; full smoke passed (signed event → run → real DM reply;
+fleet-health returns real dashboard data; old Trigger key confirmed
+dead). NOTE: the Slack signing secret in service is byte-identical to
+the pre-rotation value — if it was meant to be regenerated, it wasn't;
+it should be, since the old value reached session transcripts.
+
+**Monday API pin: 2025-04 → 2026-07 (current).** The audit's claim that
+2025-04 was unsupported stayed refuted, but the support window ends with
+the 2026-07 line being current — running on the oldest maintenance
+version invites silent drift. Verified live before the bump: identical
+shapes for items_page/cursor/column{title}/updated_at, missing board
+still returns an empty array, doc block types still space-cased.
+lib/monday.contract.test.ts now pins all of those against the live API
+(skips in CI where no Monday secret exists; runs via predeploy), and the
+transport logs pinned-vs-served version once per process so a future
+reroute is visible in run logs instead of in wrong Slack answers.
 
 Closes the second audit's P1 class. Three disjoint work streams, all
 findings re-verified in code before fixing. Deployed v20260731.2

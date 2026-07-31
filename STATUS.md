@@ -1,6 +1,6 @@
 # Marco — STATUS.md (pickup doc)
 
-Last updated: **2026-07-30**. Read this first if you're picking up Marco development.
+Last updated: **2026-07-31** (post Waves 1–6 remediation; see CODEX-FINDINGS.md disposition table). Read this first if you're picking up Marco development.
 
 The three identity files ([SOUL.md](SOUL.md) / [COMPANY.md](COMPANY.md) / [AGENTS.md](AGENTS.md)) say who Marco is. This file says **what's built, what works, what's next, and where to look when something breaks**.
 
@@ -12,7 +12,7 @@ The three identity files ([SOUL.md](SOUL.md) / [COMPANY.md](COMPANY.md) / [AGENT
 
 | | |
 |---|---|
-| Trigger.dev prod | live — check current version via runs API (`version` field); `20260714.x` series as of 2026-07-14 |
+| Trigger.dev prod | live — check current version via runs API (`version` field); `20260731.x` series as of 2026-07-31 (6 tasks) |
 | Trigger.dev project | `proj_nvpgdhytpkikscybodkk` (Marco's OWN — split from oltre-agents 2026-04-24) |
 | Slack app | `A0ASRRXM7MM` in Oltre HQ (bot user `U0ATL76PG9F`) |
 | Vercel route | `https://oltre-dashboard.vercel.app/api/marco/slack` (GET = diagnostic probe) |

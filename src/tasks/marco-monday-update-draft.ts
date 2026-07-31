@@ -424,10 +424,11 @@ async function runDraft(payload: MondayUpdateDraftPayload, runId: string) {
   }
 
   // ─── Compose update body with enforced signature ──────────
-  // The signature is forced for ALL tiers and derived server-side from the
-  // Slack sender ID. Tier-1 custom attribution (allowed on paper by the
-  // Phase-6a decision) is DEFERRED pending an explicit Andrew decision —
-  // until then Andrew gets the same forced "— Andrew via Marco".
+  // The signature is forced for ALL tiers — Andrew included, by his own
+  // decision (2026-07-31, decisions/log.md): "Should still have my
+  // signature." It is what makes a Marco-written update identifiable in a
+  // Monday feed several systems write to. Derived server-side from the
+  // Slack sender ID; no tier can override it.
   // Strip any attribution line smuggled into the parsed content so a user
   // can't fake someone else's "via Marco" signature in the body.
   // sanitizeSlackMarkup first: Slack auto-wraps every URL in <...> and

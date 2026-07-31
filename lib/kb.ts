@@ -45,6 +45,7 @@
 
 import { redis } from "./redis.js";
 import { clampMs, remainingMs } from "./deadline.js";
+import { MONDAY_API_VERSION, logEffectiveVersionOnce } from "./monday.js";
 
 const MONDAY_API = "https://api.monday.com/v2";
 
@@ -61,16 +62,16 @@ async function mondayGraphql<T>(
   query: string,
   variables: Record<string, unknown> = {},
 ): Promise<T> {
+  logEffectiveVersionOnce();
   const res = await fetch(MONDAY_API, {
     method: "POST",
     headers: {
       Authorization: token(),
       "Content-Type": "application/json",
-      // Verified live 2026-07-29: docs/blocks(page, limit) resolves on
-      // 2025-04 with Marco's key (2024-01 is deprecated). NOTE: 2025-04
-      // returns block types with spaces ("large title"), not underscores —
-      // renderDocBlock normalizes.
-      "API-Version": "2025-04",
+      // Pin single-sourced from lib/monday.ts. Verified live 2026-07-31 on
+      // 2026-07: docs/blocks(page, limit) unchanged, and block types are
+      // STILL space-cased ("large title") — renderDocBlock normalizes.
+      "API-Version": MONDAY_API_VERSION,
     },
     body: JSON.stringify({ query, variables }),
     // 25s deadline, clamped to the run's remaining budget — see

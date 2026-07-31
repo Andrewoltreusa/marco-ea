@@ -11,9 +11,9 @@ round. Status legend: DONE / READY (code ships next session) / BLOCKED-ANDREW
 | — | Dealer-process questions route to KB §23-24, not lead-check | S | **DONE 2026-07-14** |
 | 1 | KB repair: rebuild the ~40% destroyed table debris (glossary, redirects, workflow registry), refresh Section 12 (April snapshot) | M | QUEUED — content pipeline like the §17-24 ingest; needs a working session |
 | 2 | Dealer Partners flip-nagger (4 PM check: reply logged but status not flipped → DM Bella) + "where is [store] in the dealer pipeline?" | S-M | BLOCKED-ANDREW — the Monday Dealer Partners board must exist first (dealer v2 build; Bella's template pack awaits approval) |
-| 3 | Block Kit approval buttons replacing ✅ reactions (wait-tokens, draftId-bound) | M | BLOCKED-ANDREW — Slack app needs Interactivity request URL set to the webhook URL; code ships once configured |
-| 4 | Tier-scoped hydration (redact Monday data in code before the model sees it) | M | QUEUED |
-| 5 | Flip scheduled skills live (DRY_RUN=0) | S | BLOCKED-ANDREW — say go when the DM previews look right; also choose a destination (explicitly NOT #oltre-office per 2026-07-14) |
+| 3 | Block Kit approval buttons replacing ✅ reactions (wait-tokens, draftId-bound) | M | QUEUED — blocker likely cleared 2026-07 (a Slack Interactivity endpoint now exists in the dashboard); verify the app's Interactivity URL points at it, then code ships. Note: the Wave-5 draft state machine already gives reactions exactly-once semantics, so this is now UX polish, not a safety fix |
+| 4 | Tier-scoped hydration (redact Monday data in code before the model sees it) | M | **DONE 2026-07-30** (Wave 6: lib/tier-redact.ts — AR rows excluded pre-hydration, financial columns stripped pre-prompt; decisions/log.md) |
+| 5 | Flip scheduled skills live (DRY_RUN=0) | S | **DONE 2026-07-31** — DRY_RUN=0 in Trigger prod; brief + alerts run live to DMs. Channel destination still pending: APPROVED_CHANNELS stays empty until the 2026-08-07 review (decisions/log.md) |
 | 7 | Decision-debt block in weekly SWOT (Q2 break-point, Day-0 response move, $65K reactivation, anchor tier, COGS, MAP) | S | QUEUED — ships with weekly-swot task |
 | 8 | Draft-verifier before Level-2 writes (rule checks first, fresh-context LLM critique second) | S | QUEUED |
 | 9 | Per-client production status drafts (weekly, Bella-approved via draft flow) | M | QUEUED — after #3 (buttons make approval clean) |
@@ -22,9 +22,15 @@ round. Status legend: DONE / READY (code ships next session) / BLOCKED-ANDREW
 | 12 | template.md + scoring.md per scheduled skill with self-check before posting | S | QUEUED — ships with the next scheduled-skill pass |
 
 Also queued from earlier phases: friday-weekly-rollup + weekly-swot tasks,
-conversation-continuity fixes (reply "1" to a disambiguation list; the
-Christopher Stadler triple-duplicate shows Leads data hygiene is needed too),
-bilingual team announcement, credential rotation for Marco/.env.
+conversation-continuity fixes (reply "1" to a disambiguation list),
+bilingual team announcement. Done since: credential rotation for Marco/.env
+(2026-07-31); exact-duplicate rows now always disambiguate instead of
+auto-selecting (Wave 6 resolveCandidates). The Monday Leads duplicate-row
+data hygiene itself (Christopher Stadler class) is under separate
+investigation in oltre-agents — not Marco's.
+
+Post-audit remediation status (Waves 1–6, 2026-07-29 → 07-31) lives in
+CODEX-FINDINGS.md's disposition table + decisions/log.md.
 
 Andrew's standing decisions recorded 2026-07-14 (see decisions/log.md):
 no dry-run or live posts to #oltre-office until he picks a destination; the
