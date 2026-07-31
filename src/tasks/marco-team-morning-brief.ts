@@ -24,6 +24,7 @@
  */
 
 import { schedules, logger } from "@trigger.dev/sdk";
+import { isValidBrief } from "./brief-validation.js";
 import { beginTaskBudget } from "../../lib/deadline.js";
 import { anthropic } from "../../lib/anthropic.js";
 import { getBoardItems, BOARDS, type BoardItemRow } from "../../lib/monday.js";
@@ -88,20 +89,9 @@ function dealCounts(items: BoardItemRow[]): string {
     .join(", ");
 }
 
-/**
- * Sanity-gate the composed brief before it leaves the building. On
- * failure the caller falls back to the raw-facts brief, which is built
- * from code-computed numbers only.
- */
-function isValidBrief(brief: string): boolean {
-  return (
-    brief.includes("Oltre —") &&
-    /\d/.test(brief) &&
-    brief.length < 3000 &&
-    !brief.includes("!") &&
-    !/[\u{1F300}-\u{1FAFF}]/u.test(brief)
-  );
-}
+// Brief output validation lives in ./brief-validation.ts (format rules +
+// numeric grounding against the facts block) so it is unit-testable
+// without importing the task graph.
 
 /** Deliverable save is best-effort AFTER delivery — log-only on failure. */
 async function saveBriefBestEffort(brief: string): Promise<void> {
@@ -218,8 +208,9 @@ export const marcoTeamMorningBrief = schedules.task({
     }
 
     // Output validation: a composed brief that violates the format rules
-    // never ships — fall back to raw facts.
-    if (brief !== rawFactsBrief && !isValidBrief(brief)) {
+    // OR uses any number not present in the facts block never ships —
+    // fall back to raw facts.
+    if (brief !== rawFactsBrief && !isValidBrief(brief, facts)) {
       logger.warn("composed brief failed output validation — falling back to raw facts", {
         length: brief.length,
       });

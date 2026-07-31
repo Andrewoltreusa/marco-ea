@@ -6,7 +6,12 @@
  */
 
 import { describe, it, expect, beforeEach } from "vitest";
-import { routeInbound, classifyIntent, __resetTier3State } from "./router.js";
+import {
+  routeInbound,
+  classifyIntent,
+  tier3ShouldPost,
+  __resetTier3State,
+} from "./router.js";
 import { tierFor } from "./allowlist.js";
 
 describe("allowlist", () => {
@@ -165,7 +170,10 @@ describe("router tier gating", () => {
     expect(r.rateLimited).toBe(false);
   });
 
-  it("Tier 3 second message within 24h → rate-limited refusal", () => {
+  it("Tier 3 second message within 24h → rate-limited refusal (in-memory fallback layer)", () => {
+    // Process-local only: this Map verdict is the FALLBACK. The durable
+    // cross-run 24h window is the inbound task's Redis SET NX on
+    // marco:tier3:refused:<userId> — see tier3ShouldPost below.
     const evt = {
       slackUserId: "U000000RANDOM",
       channel: "D123",
@@ -198,5 +206,38 @@ describe("router tier gating", () => {
     });
     expect(r.skill).toBe("production-eta");
     expect(r.tier).toBe(2);
+  });
+});
+
+describe("tier3ShouldPost (durable Redis gate + in-memory fallback)", () => {
+  it("Redis SET won the 24h key → post, regardless of the Map", () => {
+    expect(
+      tier3ShouldPost({ inMemoryRateLimited: false, redisSetOk: true }),
+    ).toBe(true);
+    // Long-lived process where the Map remembers a refusal whose Redis
+    // key has since expired: Redis is authoritative — 24h have passed.
+    expect(
+      tier3ShouldPost({ inMemoryRateLimited: true, redisSetOk: true }),
+    ).toBe(true);
+  });
+
+  it("Redis key already held → silent, regardless of the Map", () => {
+    // Fresh process (empty Map) but another run refused within 24h —
+    // exactly the cross-run case the Map alone could never catch.
+    expect(
+      tier3ShouldPost({ inMemoryRateLimited: false, redisSetOk: false }),
+    ).toBe(false);
+    expect(
+      tier3ShouldPost({ inMemoryRateLimited: true, redisSetOk: false }),
+    ).toBe(false);
+  });
+
+  it("Redis unavailable → fall back to the router's in-memory verdict", () => {
+    expect(
+      tier3ShouldPost({ inMemoryRateLimited: false, redisSetOk: null }),
+    ).toBe(true);
+    expect(
+      tier3ShouldPost({ inMemoryRateLimited: true, redisSetOk: null }),
+    ).toBe(false);
   });
 });

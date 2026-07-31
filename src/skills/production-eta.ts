@@ -8,6 +8,8 @@
 import {
   fuzzyFindItems,
   getItemWithColumns,
+  resolveCandidates,
+  formatCandidateList,
   BOARDS,
 } from "../../lib/monday.js";
 
@@ -16,34 +18,40 @@ export async function productionEta(query: string): Promise<string> {
     return "Which project? Give me a client or deal name.";
   }
 
-  const candidates = await fuzzyFindItems(query, {
-    limit: 3,
-    boards: [BOARDS.OCD_SCHEDULE],
-  });
+  // Tie-breaking centralized in resolveCandidates (finding 5).
+  const resolution = resolveCandidates(
+    await fuzzyFindItems(query, { limit: 3, boards: [BOARDS.OCD_SCHEDULE] }),
+  );
 
-  if (candidates.length === 0) {
-    // Fall back to deals — maybe it's a deal that hasn't entered production yet
-    const dealCandidates = await fuzzyFindItems(query, {
-      limit: 1,
-      boards: [BOARDS.DEALS],
-    });
-    if (dealCandidates.length > 0 && dealCandidates[0].score > 0.3) {
+  if (resolution.kind === "none") {
+    // Fall back to deals — maybe it's a deal that hasn't entered
+    // production yet. Limit 3 so a deal-side tie is visible too.
+    const dealResolution = resolveCandidates(
+      await fuzzyFindItems(query, { limit: 3, boards: [BOARDS.DEALS] }),
+    );
+    if (dealResolution.kind === "ambiguous") {
       return (
-        `*${dealCandidates[0].name}* isn't on the production schedule yet. ` +
-        `It's still in Deals at the ${dealCandidates[0].boardName} level.`
+        `Nothing on the production schedule matches *${query}*, but several deals do:\n` +
+        `${formatCandidateList(dealResolution.candidates)}\nWhich one?`
+      );
+    }
+    if (dealResolution.kind === "match") {
+      return (
+        `*${dealResolution.top.name}* isn't on the production schedule yet. ` +
+        `It's still in Deals at the ${dealResolution.top.boardName} level.`
       );
     }
     return `I couldn't find *${query}* on the production schedule or in Deals.`;
   }
 
-  const top = candidates[0];
-  if (candidates.length > 1 && top.score - candidates[1].score < 0.15 && top.score < 0.8) {
-    const list = candidates
-      .map((c) => `• *${c.name}*`)
-      .join("\n");
-    return `Multiple matches on the production schedule:\n${list}\nWhich one?`;
+  if (resolution.kind === "ambiguous") {
+    return (
+      `Multiple matches on the production schedule:\n` +
+      `${formatCandidateList(resolution.candidates)}\nWhich one?`
+    );
   }
 
+  const top = resolution.top;
   const item = await getItemWithColumns(top.id);
   if (!item) return `Found *${top.name}* but couldn't load the details.`;
 

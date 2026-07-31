@@ -8,7 +8,7 @@ Verified Marco can read every source it needs before building Phase 5/6 skills.
 |---|---|---|---|
 | **Oltre Vault** | Filesystem read of `c:\Users\AndrewShpiruk\Oltre Vault\` | Read `CLAUDE.md`, `clients/oltre-castings/context/team.md`, `clients/oltre-castings/context/key-ids.md` | ✅ All readable. Vault structure matches COMPANY.md. |
 | **Monday.com** | `POST https://api.monday.com/v2` with `Authorization: $MONDAY_API_KEY` from `oltre-agents/.env` | `query { me { name email } }` | ✅ Returned `Andrew Shpiruk / andrews@oregonfivestar.com`. Request ID `dc4d5987-a5a1-9308-9fa1-de05e8cc1612`. |
-| **Oltre Dashboard** | `GET https://oltre-dashboard.vercel.app/api/state` with `Authorization: Bearer oltre-api-2026` | State pull | ✅ Returned live state: `currentFocus: "Amanda Gilliland follow-up + strategic planning"`, non-empty `completedToday` array. |
+| **Oltre Dashboard** | `GET https://oltre-dashboard.vercel.app/api/state` with `Authorization: Bearer $OLTRE_DASHBOARD_API_TOKEN (env)` `<value redacted 2026-07-30 — leaked literal removed, secret rotated>` | State pull | ✅ Returned live state: `currentFocus: "Amanda Gilliland follow-up + strategic planning"`, non-empty `completedToday` array. |
 | **FreshBooks** | OAuth refresh-token flow using `FRESHBOOKS_CLIENT_ID/SECRET/REFRESH_TOKEN/ACCOUNT_ID` from `oltre-agents/.env` | **Not yet exercised in this session** — credentials present in env, token refresh implementation deferred to Phase 6 `cash-position` skill. |
 | **Slack** | Marco's own Slack app (not yet created) | **Deferred to Phase 8** — Marco app install is the next manual Andrew action. |
 

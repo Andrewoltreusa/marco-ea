@@ -22,7 +22,11 @@
  */
 
 import { task, logger, tasks } from "@trigger.dev/sdk";
-import { routeInbound, type RoutedRequest } from "../slack/router.js";
+import {
+  routeInbound,
+  tier3ShouldPost,
+  type RoutedRequest,
+} from "../slack/router.js";
 import { postMessage, dmUser, addReaction, swapReaction } from "../../lib/slack.js";
 import { beginRequest, markResponded, markDelegated, redis } from "../../lib/redis.js";
 import { auditRequest } from "../../lib/audit.js";
@@ -55,6 +59,18 @@ export interface NormalizedSlackEvent {
 // trigger platform retries.
 const MAX_DURATION_SEC = 120;
 
+// Durable Tier-3 refusal window. The router's Map is process-local and
+// every Trigger run is a fresh process — this key is what actually holds
+// the one-refusal-per-24h contract across runs.
+const TIER3_REFUSED_KEY = (userId: string) => `marco:tier3:refused:${userId}`;
+const TIER3_REFUSAL_WINDOW_SEC = 86_400;
+
+// Prefixed onto general-query answers that were supposed to come from
+// the KB (flag off or KB call failed) — the asker must know the answer
+// skipped the playbook.
+const KB_FALLBACK_NOTE =
+  "KB lookup unavailable — answering from Monday data only.";
+
 export const marcoSlackInbound = task({
   id: "comms/marco-slack-inbound",
   maxDuration: MAX_DURATION_SEC,
@@ -79,8 +95,9 @@ export const marcoSlackInbound = task({
       isDM: payload.isDM,
     });
 
-    // Tier classification FIRST — Tier-3 traffic must never touch Redis
-    // state or receive acks/DMs beyond the single refusal.
+    // Tier classification FIRST — Tier-3 traffic must never create
+    // request-lifecycle state or receive acks/DMs beyond the single
+    // refusal. Its only Redis footprint is the denial log + refusal key.
     const routed = routeInbound({
       slackUserId: payload.slackUserId,
       channel: payload.channel,
@@ -114,9 +131,30 @@ export const marcoSlackInbound = task({
       });
 
     if (routed.skill === "refuse") {
-      await logAccessDenial(payload, routed);
+      // Durable 24h refusal window (CODEX finding 9). The router's Map
+      // is process-local — fresh per Trigger run — so the cross-run gate
+      // is SET NX EX 86400 on the per-user key: only the run that wins
+      // the key posts. Redis down → fall back to the in-memory verdict
+      // rather than going fully silent on a first refusal.
+      let redisSetOk: boolean | null = null;
+      try {
+        const won = await redis().set(TIER3_REFUSED_KEY(payload.slackUserId), "1", {
+          nx: true,
+          ex: TIER3_REFUSAL_WINDOW_SEC,
+        });
+        redisSetOk = won === "OK";
+      } catch (err) {
+        logger.warn("tier-3 refusal gate redis unavailable — using in-memory verdict", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      const shouldPost = tier3ShouldPost({
+        inMemoryRateLimited: !!routed.rateLimited,
+        redisSetOk,
+      });
+      await logAccessDenial(payload, routed, !shouldPost);
       let posted = false;
-      if (!routed.rateLimited) {
+      if (shouldPost) {
         try {
           await postMessage({
             channel: routed.replyChannel,
@@ -132,7 +170,7 @@ export const marcoSlackInbound = task({
       }
       // ok = the actual outcome: rate-limited silence is deliberate, a
       // failed refusal post is not.
-      await audit(!!routed.rateLimited || posted);
+      await audit(!shouldPost || posted);
       return { ok: true, tier: 3, posted };
     }
 
@@ -387,12 +425,16 @@ async function runSkill(
     case "kb-query": {
       // Feature-flagged. If ENABLE_KB isn't "true", OR the KB call throws,
       // fall through to general-query so Marco stays answerable while we
-      // iterate on the KB plumbing.
+      // iterate on the KB plumbing. The substituted answer is DISCLOSED —
+      // a process question answered without the playbook must say so, not
+      // impersonate a KB answer (CODEX finding 7).
       if (process.env.ENABLE_KB !== "true") {
         console.info(
           "[marco inbound] kb-query routed but ENABLE_KB!=true — falling through to general-query",
         );
-        return { text: await generalQuery(q || "help", tier, ch) };
+        return {
+          text: `${KB_FALLBACK_NOTE}\n${await generalQuery(q || "help", tier, ch)}`,
+        };
       }
       try {
         return {
@@ -407,7 +449,9 @@ async function runSkill(
           "[marco inbound] kb-query threw — falling through to general-query:",
           err instanceof Error ? err.message : String(err),
         );
-        return { text: await generalQuery(q || "help", tier, ch) };
+        return {
+          text: `${KB_FALLBACK_NOTE}\n${await generalQuery(q || "help", tier, ch)}`,
+        };
       }
     }
     case "cash-position":
@@ -439,13 +483,17 @@ async function runSkill(
 async function logAccessDenial(
   payload: NormalizedSlackEvent,
   routed: RoutedRequest,
+  // The EFFECTIVE verdict after the Redis gate — the allowlist requires
+  // logging the action actually taken (reply sent / rate-limited
+  // silence), not the router's process-local guess.
+  rateLimited: boolean,
 ): Promise<void> {
   const entry = {
     ts: new Date().toISOString(),
     slackUserId: payload.slackUserId,
     channel: routed.replyChannel,
     text: payload.text.slice(0, 200),
-    rateLimited: routed.rateLimited ?? false,
+    rateLimited,
   };
   logger.warn("access-denial", entry);
   // Durable audit trail (closes the Phase-6b TODO). Redis, not a local

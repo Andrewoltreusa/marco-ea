@@ -13,18 +13,24 @@
  *                              starts across Trigger.dev task runs. A hit
  *                              here is served WITHOUT touching Monday.
  *   3. Upstash Redis (LKG)   —  7 d TTL ("marco:kb:lkg"), last-known-good.
- *                              Served immediately when the fresh key has
- *                              expired, while a background single-flight
- *                              refresh ("marco:kb:refresh-lock") re-reads
- *                              Monday. Cold workers no longer pay the
- *                              21-page doc read on every KB question.
+ *                              When the fresh key has expired, a
+ *                              single-flight refresh
+ *                              ("marco:kb:refresh-lock") re-reads Monday —
+ *                              AWAITED when the run budget affords it,
+ *                              skipped otherwise (never fire-and-forget:
+ *                              an abandoned promise dies with the run and
+ *                              leaves the lock held). Cold workers no
+ *                              longer pay the 21-page doc read on every
+ *                              KB question.
  *   4. Monday authoritative  — source of truth. Only read when neither
  *                              Redis key exists (blocking) or during the
- *                              background refresh.
+ *                              LKG refresh.
  *
  * Completeness gate: a fetched KB is only allowed to overwrite the Redis
  * keys if it passes size + sentinel-section validation — a partial doc
- * read can never clobber a good cached copy.
+ * read can never clobber a good cached copy. Since 2026-07-30 cached
+ * entries are ALSO re-validated on read, so a poisoned key is a miss,
+ * not an answer.
  *
  * Graceful fallback: if Monday errors AND anything is cached (even
  * stale), we return the stale value with a console.warn so Marco stays
@@ -38,7 +44,7 @@
  */
 
 import { redis } from "./redis.js";
-import { clampMs } from "./deadline.js";
+import { clampMs, remainingMs } from "./deadline.js";
 
 const MONDAY_API = "https://api.monday.com/v2";
 
@@ -125,12 +131,47 @@ const REFRESH_LOCK_TTL_SEC = 120;
 const KB_MIN_CHARS = 50_000;
 
 /**
- * Validate a freshly fetched KB before it is allowed to overwrite the
- * cached copies. Returns null when valid, otherwise a human-readable
- * reason. Sentinels: the doc title, the first section, and the newest
- * section (17) — if the tail section is missing, pagination broke.
+ * Tail sentinel: the KB's LAST numbered section as of 2026-07-30. When
+ * Andrew appends a new trailing section, bump this constant — one line.
+ * (The old sentinel checked section 17 while the KB had grown to 24, so
+ * a pagination regression that dropped sections 18–24 would have passed
+ * the gate and poisoned the 7-day LKG copy.)
  */
-function validateKbText(text: string): string | null {
+const KB_TAIL_SECTION_NUMBER = 24;
+
+/**
+ * Minimum count of DISTINCT numbered-section headings a complete KB
+ * carries. Deliberately below the real count (24) so section merges
+ * don't false-alarm, but far above what a truncated read produces.
+ */
+const KB_MIN_SECTION_COUNT = 20;
+
+/**
+ * Distinct section numbers found in "N. Title" headings (optionally
+ * markdown-#-prefixed, at line start). Numbered LIST items also render
+ * as "1. text" but always with the literal "1.", so they can only ever
+ * contribute the number 1 — distinct counting stays honest.
+ */
+function kbSectionNumbers(text: string): Set<number> {
+  const out = new Set<number>();
+  const re = /^(?:#{1,6}\s*)?(\d{1,3})\.\s+\S/gm;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    out.add(parseInt(m[1], 10));
+  }
+  return out;
+}
+
+/**
+ * Validate a KB text before it is allowed to overwrite the cached copies
+ * (and, since 2026-07-30, before a cached copy is trusted on read).
+ * Returns null when valid, otherwise a human-readable reason. Checks:
+ * doc title, first section, a minimum distinct-section count, and the
+ * tail-section sentinel — if the tail is missing, pagination broke.
+ *
+ * Exported for tests.
+ */
+export function validateKbText(text: string): string | null {
   if (text.length < KB_MIN_CHARS) {
     return `too short (${text.length} chars < ${KB_MIN_CHARS})`;
   }
@@ -140,8 +181,12 @@ function validateKbText(text: string): string | null {
   if (!/\b1\. Lead Workflow/.test(text)) {
     return 'missing "1. Lead Workflow" section sentinel';
   }
-  if (!/\b17\. Who Oltre Sells To/.test(text)) {
-    return 'missing "17. Who Oltre Sells To" section sentinel (doc tail truncated?)';
+  const sections = kbSectionNumbers(text);
+  if (sections.size < KB_MIN_SECTION_COUNT) {
+    return `only ${sections.size} distinct numbered sections found (< ${KB_MIN_SECTION_COUNT})`;
+  }
+  if (!sections.has(KB_TAIL_SECTION_NUMBER)) {
+    return `missing section "${KB_TAIL_SECTION_NUMBER}." tail sentinel (doc tail truncated?)`;
   }
   return null;
 }
@@ -382,11 +427,35 @@ async function fetchAsLongText(itemId: string): Promise<DocFetchResult | null> {
 // Public API
 // ─────────────────────────────────────────────────────────────
 
+/**
+ * Re-validate a cache entry read back from Redis. Anything malformed or
+ * failing the completeness gate is a cache MISS — a poisoned key (e.g.
+ * written before a validation fix, or clobbered by another writer) must
+ * not be served for up to 7 days just because it exists.
+ *
+ * Exported for tests.
+ */
+export function validateCachedEntry(
+  key: string,
+  raw: unknown,
+): CacheEntry | null {
+  if (!raw || typeof (raw as CacheEntry).text !== "string") return null;
+  const entry = raw as CacheEntry;
+  const problem = validateKbText(entry.text);
+  if (problem) {
+    console.warn(
+      `[marco kb] cached KB at ${key} failed validation (${problem}) — treating as cache miss`,
+    );
+    return null;
+  }
+  return entry;
+}
+
 /** Read one of the KB cache keys, tolerating Redis being down. */
 async function readCacheKey(key: string): Promise<CacheEntry | null> {
   try {
-    const raw = (await redis().get(key)) as CacheEntry | null;
-    if (raw && typeof raw.text === "string") return raw;
+    const raw = await redis().get(key);
+    return validateCachedEntry(key, raw);
   } catch (err) {
     console.warn(
       `[marco kb] redis read failed (${key}):`,
@@ -500,14 +569,29 @@ async function fetchValidateAndCache(
 }
 
 /**
- * Background refresh behind a Redis single-flight lock (NX EX 120): only
- * one worker per 2-minute window re-reads the 21-page doc; everyone else
- * keeps serving the LKG copy.
+ * Minimum run budget required to attempt the LKG refresh in-line. The
+ * doc read is ~21 sequential page calls (each individually clamped);
+ * anything under this and we skip the refresh entirely this run — the
+ * LKG copy plus the next request cover freshness.
  */
-async function refreshInBackground(
+const REFRESH_MIN_BUDGET_MS = 45_000;
+
+/**
+ * LKG refresh behind a Redis single-flight lock (NX EX 120): only one
+ * worker at a time re-reads the 21-page doc; everyone else keeps serving
+ * the LKG copy. AWAITED by the caller — a fire-and-forget promise dies
+ * with the Trigger run, which used to leave the lock held for the full
+ * 120s with nothing written. The lock is released in a finally so a
+ * completed (or failed) refresh doesn't lock the next caller out either;
+ * the TTL remains the crash backstop.
+ *
+ * Returns the refreshed entry, or null when the lock was contended /
+ * unreachable.
+ */
+async function refreshBehindLock(
   docId: string,
   prior: CacheEntry,
-): Promise<void> {
+): Promise<CacheEntry | null> {
   let lock: unknown = null;
   try {
     lock = await redis().set(REFRESH_LOCK_KEY, "1", {
@@ -519,10 +603,18 @@ async function refreshInBackground(
       "[marco kb] refresh lock acquire failed:",
       err instanceof Error ? err.message : String(err),
     );
-    return;
+    return null;
   }
-  if (lock !== "OK") return; // another worker is already refreshing
-  await fetchValidateAndCache(docId, prior);
+  if (lock !== "OK") return null; // another worker is already refreshing
+  try {
+    return await fetchValidateAndCache(docId, prior);
+  } finally {
+    try {
+      await redis().del(REFRESH_LOCK_KEY);
+    } catch {
+      // best-effort — the 120s TTL is the backstop
+    }
+  }
 }
 
 /**
@@ -557,18 +649,30 @@ export async function loadKnowledgeBase(): Promise<string> {
     return fresh.text;
   }
 
-  // 3. Last-known-good (7d) — serve stale IMMEDIATELY, refresh in the
-  //    background behind the single-flight lock. Fire-and-forget: a
-  //    refresh failure only logs; the caller already has an answer.
+  // 3. Last-known-good (7d) — refresh behind the single-flight lock
+  //    when the run budget affords it, else serve the LKG copy as-is.
+  //    The refresh is AWAITED, never fire-and-forget: an abandonable
+  //    promise dies with the Trigger run and leaves the lock held with
+  //    nothing written. A refresh failure only logs; the LKG copy is
+  //    the answer either way.
   const lkg = await readCacheKey(LKG_KEY);
   if (lkg) {
     cached = lkg;
-    refreshInBackground(docId, lkg).catch((err) =>
-      console.error(
-        "[marco kb] background refresh failed:",
-        err instanceof Error ? err.message : String(err),
-      ),
-    );
+    if (remainingMs() >= REFRESH_MIN_BUDGET_MS) {
+      try {
+        const refreshed = await refreshBehindLock(docId, lkg);
+        if (refreshed) return refreshed.text;
+      } catch (err) {
+        console.error(
+          "[marco kb] LKG refresh failed:",
+          err instanceof Error ? err.message : String(err),
+        );
+      }
+    } else {
+      console.warn(
+        "[marco kb] skipping KB refresh — run budget too low; serving LKG",
+      );
+    }
     return lkg.text;
   }
 

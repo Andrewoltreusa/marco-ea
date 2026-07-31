@@ -21,17 +21,55 @@ import {
   BOARDS,
   type BoardItemRow,
 } from "../../lib/monday.js";
-import { parseIsoDateNoonUtc, isSameIsoWeek } from "../../lib/dates.js";
+import { parseIsoDateNoonUtc, isSameIsoWeek, addDays } from "../../lib/dates.js";
 
 export type StatsBoard = "deals" | "leads" | "contacts";
 
+export type StatsTimeframe = "thisWeek" | "nextWeek" | "unsupported" | null;
+
 export interface BoardStatsPlan {
   board: StatsBoard;
-  /** Deals-only: filter to items whose Close Date falls in the current ISO week. */
+  /**
+   * Closing/due timeframe (finding 6):
+   *   "thisWeek" / "nextWeek" — the two ISO-week slices we can compute;
+   *   "unsupported" — a closing/due question with any OTHER timeframe
+   *     ("in June", "by Q3") — gets an explicit refusal, NEVER the
+   *     whole-board count;
+   *   null — not a closing/due question, or no timeframe given.
+   */
+  timeframe: StatsTimeframe;
+  /** Back-compat alias: timeframe === "thisWeek". */
   closingThisWeek: boolean;
   /** Lowercased question text, used for stage/status filter matching. */
   text: string;
 }
+
+/**
+ * Timeframe phrasings we can NOT slice (months, quarters, years, other
+ * week phrasings, explicit dates). Only consulted after "this week" /
+ * "next week" have already failed to match, so plain `\bweek\b` here
+ * means phrasings like "in two weeks" or "week of the 15th". "may" is
+ * both a month and a modal verb, so it only counts with a preposition
+ * or a following number.
+ */
+const UNSUPPORTED_TIMEFRAME = new RegExp(
+  [
+    "\\b(january|february|march|april|june|july|august|september|october|november|december)\\b",
+    "\\b(jan|feb|mar|apr|jun|jul|aug|sept?|oct|nov|dec)\\b",
+    "\\b(in|by|for|during|of|before|until)\\s+may\\b",
+    "\\bmay\\s+\\d{1,2}\\b",
+    "\\bq[1-4]\\b",
+    "\\bquarter\\b",
+    "\\b(this|next|last|current|the)\\s+(month|year)\\b",
+    "\\bend of\\b",
+    "\\bweeks?\\b",
+    "\\btoday\\b",
+    "\\btomorrow\\b",
+    "\\b20\\d{2}\\b",
+    "\\d{4}-\\d{2}",
+    "\\d{1,2}/\\d{1,2}",
+  ].join("|"),
+);
 
 const BOARD_IDS: Record<StatsBoard, string> = {
   deals: BOARDS.DEALS,
@@ -54,7 +92,7 @@ const STAGE_LABEL: Record<StatsBoard, string> = {
 
 /**
  * Parse the question into a plan: which board (first-mentioned wins;
- * default Deals) and whether it's a "closing this week" question.
+ * default Deals) and, for closing/due questions, which timeframe.
  * Exported for unit tests.
  */
 export function parseBoardStatsQuestion(raw: string): BoardStatsPlan {
@@ -69,11 +107,15 @@ export function parseBoardStatsQuestion(raw: string): BoardStatsPlan {
   mentions.sort((a, b) => a.idx - b.idx);
   const board: StatsBoard = mentions[0]?.board ?? "deals";
 
-  const closingThisWeek =
-    /\b(closing|close|closes|due|expected)\b/.test(text) &&
-    /\b(this|current)\s+week\b/.test(text);
+  const closingVerb = /\b(closing|close|closes|due|expected)\b/.test(text);
+  let timeframe: StatsTimeframe = null;
+  if (closingVerb) {
+    if (/\b(this|current)\s+week\b/.test(text)) timeframe = "thisWeek";
+    else if (/\bnext\s+week\b/.test(text)) timeframe = "nextWeek";
+    else if (UNSUPPORTED_TIMEFRAME.test(text)) timeframe = "unsupported";
+  }
 
-  return { board, closingThisWeek, text };
+  return { board, timeframe, closingThisWeek: timeframe === "thisWeek", text };
 }
 
 function escapeRegExp(s: string): string {
@@ -91,6 +133,15 @@ function stageOf(row: BoardItemRow, board: StatsBoard): string {
 
 export async function boardStats(question: string): Promise<string> {
   const plan = parseBoardStatsQuestion(question);
+
+  // Finding 6: a closing/due question with a timeframe we can't slice
+  // gets an explicit refusal BEFORE any board read — falling through to
+  // the whole-board count confidently answered a question the user
+  // didn't ask.
+  if (plan.timeframe === "unsupported") {
+    return "I can slice closings by this week or next week right now — for other ranges check the Deals board directly.";
+  }
+
   const { boardName, items, meta } = await getBoardItems(BOARD_IDS[plan.board]);
 
   // Honesty rule: always cite how much of the board was actually read.
@@ -98,9 +149,15 @@ export async function boardStats(question: string): Promise<string> {
     meta.complete ? "" : ", incomplete"
   })_`;
 
-  // ─── "Closing this week" (Deals only — Close Date lives there) ───
-  if (plan.board === "deals" && plan.closingThisWeek) {
-    const now = new Date();
+  // ─── "Closing this/next week" (Deals only — Close Date lives there) ───
+  if (
+    plan.board === "deals" &&
+    (plan.timeframe === "thisWeek" || plan.timeframe === "nextWeek")
+  ) {
+    // "Next week" = the ISO week (Mon–Sun) containing now + 7 days.
+    const ref =
+      plan.timeframe === "nextWeek" ? addDays(new Date(), 7) : new Date();
+    const weekLabel = plan.timeframe === "nextWeek" ? "next week" : "this week";
     const closing = items
       .map((row) => ({
         row,
@@ -110,12 +167,12 @@ export async function boardStats(question: string): Promise<string> {
       }))
       .filter(
         (x): x is { row: BoardItemRow; close: Date } =>
-          x.close !== null && isSameIsoWeek(x.close, now),
+          x.close !== null && isSameIsoWeek(x.close, ref),
       )
       .sort((a, b) => a.close.getTime() - b.close.getTime());
 
     if (closing.length === 0) {
-      return `No deals have a Close Date in the current week (Mon–Sun).\n${source}`;
+      return `No deals have a Close Date ${weekLabel} (Mon–Sun).\n${source}`;
     }
 
     const shown = closing.slice(0, 15);
@@ -130,7 +187,7 @@ export async function boardStats(question: string): Promise<string> {
         ? `\n…and ${closing.length - shown.length} more.`
         : "";
     return (
-      `*${closing.length} deal${closing.length === 1 ? "" : "s"} with a Close Date this week:*\n` +
+      `*${closing.length} deal${closing.length === 1 ? "" : "s"} with a Close Date ${weekLabel}:*\n` +
       lines.join("\n") +
       more +
       `\n${source}`

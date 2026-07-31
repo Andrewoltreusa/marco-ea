@@ -51,10 +51,33 @@ const REFUSAL_TEXT =
   "I'm Marco, Oltre's company secretary. I'm not configured to respond to you — " +
   "please ask Andrew Shpiruk directly if you need something from the company.";
 
-// In-memory Tier-3 rate limiter. Backed by Upstash Redis in production
-// (see trigger task). Keyed by slackUserId → lastRefusalEpochMs.
+// In-memory Tier-3 rate limiter — process-local FALLBACK only. Every
+// Trigger.dev run is a fresh process, so this Map alone cannot hold the
+// 24h window across runs. The durable gate lives in the inbound task:
+// SET marco:tier3:refused:<userId> NX EX 86400 — the refusal posts only
+// when that SET wins. This Map's verdict is consulted only when Redis is
+// unavailable (see tier3ShouldPost). Keyed by slackUserId →
+// lastRefusalEpochMs.
 const tier3LastSeen = new Map<string, number>();
 const TIER3_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Final verdict on whether a Tier-3 refusal may post, combining the
+ * durable Redis gate with the in-memory fallback above. Pure — the
+ * inbound task performs the actual SET and passes the outcome here.
+ *
+ *   redisSetOk === true  → this run won the 24h key: post.
+ *   redisSetOk === false → another run already refused within 24h: silent.
+ *   redisSetOk === null  → Redis unavailable: fall back to the router's
+ *                          process-local Map verdict.
+ */
+export function tier3ShouldPost(opts: {
+  inMemoryRateLimited: boolean;
+  redisSetOk: boolean | null;
+}): boolean {
+  if (opts.redisSetOk !== null) return opts.redisSetOk;
+  return !opts.inMemoryRateLimited;
+}
 
 export function routeInbound(evt: InboundEvent): RoutedRequest {
   const tier = tierFor(evt.slackUserId);

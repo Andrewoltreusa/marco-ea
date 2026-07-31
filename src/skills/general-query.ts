@@ -39,6 +39,7 @@ import {
   topOutstanding,
   type ArAggregates,
 } from "../../lib/ar.js";
+import { redactMatchesForTier2 } from "../../lib/tier-redact.js";
 
 const ALL_SEARCH_BOARDS = [
   BOARDS.DEALS,
@@ -105,6 +106,10 @@ export async function generalQuery(
   const candidateTermById = new Map<string, string>();
   for (const [term, candidates] of byTerm) {
     for (const c of candidates) {
+      // TIER GATE (code, not prompt): AR 2026 rows never become entity
+      // matches for Tier 2 — their sanctioned AR view is the aggregates
+      // + top-5 outstanding blocks below (lib/tier-redact.ts).
+      if (tier === 2 && c.boardId === BOARDS.AR_2026) continue;
       if (c.score >= 0.3 && !candidateTermById.has(c.id)) {
         candidateTermById.set(c.id, term);
       }
@@ -123,6 +128,12 @@ export async function generalQuery(
       unique.push({ item: full, query: candidateTermById.get(candidateIds[i])! });
     }
   });
+
+  // TIER GATE (code, not prompt): for Tier 2, drop any AR 2026 row that
+  // slipped through hydration and strip financial columns from every
+  // other matched row BEFORE the prompt is assembled. The tier note in
+  // the prompt below is defense-in-depth only — the data must be gone.
+  const matches = tier === 2 ? redactMatchesForTier2(unique) : unique;
 
   // Financial context: the AR fetch has been running since before term
   // extraction — pre-compute sums in code and pass them as authoritative
@@ -156,16 +167,21 @@ export async function generalQuery(
     : null;
   const arTop5 =
     board && tier === 2 ? topOutstanding(board.items, 5) : null;
+  // Finding 4b: a page-cap-truncated AR read must never be presented as
+  // "all N items" — the prompt header switches to a truncated-read
+  // caveat and instructs the model to say so.
+  const arIncomplete = board !== null && !board.meta.complete;
 
   // Step 3: Have Claude compose the answer, with conversation history.
   const answer = await composeAnswer(
     question,
-    unique,
+    matches,
     tier,
     history,
     arBoardRows,
     arAggregates,
     arTop5,
+    arIncomplete,
   );
 
   // Step 4: Save the turn so follow-ups have context.
@@ -252,6 +268,7 @@ async function composeAnswer(
   arRows: BoardItemRow[] | null = null,
   arAgg: ArAggregates | null = null,
   arTop5: Array<{ name: string; remaining: number }> | null = null,
+  arIncomplete = false,
 ): Promise<string> {
   const client = anthropic();
 
@@ -303,9 +320,15 @@ async function composeAnswer(
             )
             .join("\n")
         : "  (no items had a parseable ship date)";
+    // Finding 4b: never claim "all N items" when the page safety cap
+    // truncated the read — mirror the morning brief's discipline and make
+    // the model disclose the truncation in its answer.
+    const aggHeader = arIncomplete
+      ? `AR 2026 AGGREGATES — TRUNCATED READ (only the first ${arAgg.totalItems} items on the board were read; totals may be LOW. You MUST say the read was incomplete in your answer. Use these EXACT numbers, do NOT recalculate):`
+      : `AR 2026 AUTHORITATIVE AGGREGATES (pre-computed from all ${arAgg.totalItems} items on the board — use these EXACT numbers, do NOT recalculate):`;
     arContext += `
 
-AR 2026 AUTHORITATIVE AGGREGATES (pre-computed from all ${arAgg.totalItems} items on the board — use these EXACT numbers, do NOT recalculate):
+${aggHeader}
 - Total items: ${arAgg.totalItems}
 - Total Contract $ (entire board): ${fmtUsd(arAgg.totalContract)}
 - Total Paid (Payment #1 + Payment #2 across entire board): ${fmtUsd(arAgg.totalPaid)}
@@ -328,8 +351,11 @@ ${monthLines}
         return `- ${r.name} | ${cols}`;
       })
       .join("\n");
+    const rowsHeader = arIncomplete
+      ? `AR 2026 BOARD ITEMS — TRUNCATED READ (first ${arRows.length} rows only; an item the user asks about may be missing — say so if you can't find it; for totals use the aggregates above):`
+      : `FULL AR 2026 BOARD ITEMS (${arRows.length} rows — use for item-level lookups; for totals use the aggregates above):`;
     arContext += `
-FULL AR 2026 BOARD ITEMS (${arRows.length} rows — use for item-level lookups; for totals use the aggregates above):
+${rowsHeader}
 ${rows}`;
   }
   if (arTop5 && arTop5.length > 0) {

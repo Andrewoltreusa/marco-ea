@@ -16,7 +16,14 @@
  *   marco:prodalert-dry:*                       — same, for DRY_RUN, so
  *     preview runs never suppress real alerts.
  *   marco:prodship:<itemId>                     — last seen ship date
- *     (plain "YYYY-MM-DD"), for slip detection. 30-day TTL.
+ *     (plain "YYYY-MM-DD"), for slip detection. 30-day TTL. Written in
+ *     two phases: detection only READS; a slipped item's key is
+ *     committed after every recipient's DM for that slip landed, so a
+ *     failed delivery leaves the key untouched and the next run
+ *     re-detects the same slip (per-recipient de-dup keeps whoever
+ *     already got it from being re-DMed).
+ *   marco:prodship-dry:*                        — same, for DRY_RUN, so
+ *     preview runs never consume the real stored ship dates.
  *
  * Data integrity: getBoardItems now cursor-paginates and reports
  * completeness. An incomplete read must NOT produce "no new production
@@ -46,7 +53,14 @@ const DEDUP_TTL_SECONDS = 24 * 60 * 60;
 
 /** Stored ship dates for slip detection: marco:prodship:<itemId>, 30 days. */
 const SHIP_KEY_PREFIX = "marco:prodship:";
+/** DRY_RUN shadow copy — previews must never consume the real ship state. */
+const SHIP_KEY_PREFIX_DRY = "marco:prodship-dry:";
 const SHIP_TTL_SECONDS = 30 * 24 * 60 * 60;
+
+/** Ship-state key prefix for this run's mode. Mirrors the de-dup prefixes. */
+export function shipKeyPrefix(dryRun: boolean): string {
+  return dryRun ? SHIP_KEY_PREFIX_DRY : SHIP_KEY_PREFIX;
+}
 
 /** A ship date moving later than this many business days is a slip alert. */
 const SLIP_BUSINESS_DAYS = 3;
@@ -58,7 +72,7 @@ const FLAGGED_STATUS = /\b(red|blocked?|delay(ed)?|stuck|on hold)\b/i;
 const DONE_STATUS =
   /\b(shipped|done|complete(d)?|delivered|picked up|installed|invoiced|paid|cancel(l)?ed)\b/i;
 
-interface Flag {
+export interface Flag {
   item: BoardItemRow;
   reason: string;
   stateHash: string;
@@ -108,42 +122,135 @@ function findFlags(items: BoardItemRow[]): Flag[] {
   return flags;
 }
 
-/**
- * Slip detection (SKILL.md condition 3): compare each active item's ship
- * date against the last one we stored. A move of more than 3 business
- * days later is a slip flag. Stored dates are refreshed every run for
- * every active item that has one.
- */
-async function findSlipFlags(items: BoardItemRow[]): Promise<Flag[]> {
-  const flags: Flag[] = [];
+/** A pending marco:prodship write, committed only after the DM phase. */
+export interface ShipWrite {
+  key: string;
+  itemId: string;
+  /** The ship date observed this run ("YYYY-MM-DD"). */
+  current: string;
+  /** True when this observation produced a slip flag — its commit is
+   * gated on every recipient having received the slip DM. */
+  isSlip: boolean;
+}
+
+export interface SlipDetection {
+  flags: Flag[];
+  shipWrites: ShipWrite[];
+}
+
+/** Active items whose ship date parses — the slip-detection population. */
+function shipCandidates(
+  items: BoardItemRow[],
+): Array<{ item: BoardItemRow; current: string }> {
+  const out: Array<{ item: BoardItemRow; current: string }> = [];
   for (const item of items) {
     const status = item.columns["Status"] ?? "";
     // Terminal items don't slip — and skipping them keeps Redis traffic
     // bounded to the active portion of the board.
     if (DONE_STATUS.test(status)) continue;
-
     const shipRaw = item.columns["Ship. Date"] ?? "";
     const m = shipRaw.match(/(\d{4})-(\d{2})-(\d{2})/);
     if (!m) continue;
-    const current = m[0];
+    out.push({ item, current: m[0] });
+  }
+  return out;
+}
 
-    const key = `${SHIP_KEY_PREFIX}${item.id}`;
-    const stored = (await redis().get(key)) as string | null;
-    if (stored && stored !== current) {
-      const from = parseIsoDateNoonUtc(stored);
+/**
+ * Pure slip evaluation: compare each candidate's ship date against the
+ * stored one. A move of more than 3 business days later is a slip flag.
+ * Emits a ShipWrite for every candidate (state seed / TTL refresh /
+ * changed date) but performs no IO — the caller commits the writes
+ * post-delivery via triageShipWrites.
+ */
+export function evaluateSlips(
+  items: BoardItemRow[],
+  stored: ReadonlyMap<string, string | null>,
+  keyPrefix: string,
+): SlipDetection {
+  const flags: Flag[] = [];
+  const shipWrites: ShipWrite[] = [];
+  for (const { item, current } of shipCandidates(items)) {
+    const last = stored.get(item.id) ?? null;
+    let isSlip = false;
+    if (last && last !== current) {
+      const from = parseIsoDateNoonUtc(last);
       const to = parseIsoDateNoonUtc(current);
       if (from && to && businessDaysBetween(from, to) > SLIP_BUSINESS_DAYS) {
+        isSlip = true;
         flags.push({
           item,
-          reason: `ship date slipped from ${stored} to ${current}`,
-          stateHash: `slip|${stored}|${current}`,
+          reason: `ship date slipped from ${last} to ${current}`,
+          stateHash: `slip|${last}|${current}`,
           dedupId: `${item.id}:slip`,
         });
       }
     }
-    await redis().set(key, current, { ex: SHIP_TTL_SECONDS });
+    shipWrites.push({ key: `${keyPrefix}${item.id}`, itemId: item.id, current, isSlip });
   }
-  return flags;
+  return { flags, shipWrites };
+}
+
+/**
+ * Slip detection (SKILL.md condition 3). READ-ONLY against Redis: the
+ * returned shipWrites are committed by the caller only after the DM
+ * phase, so a failed slip delivery leaves the stored date untouched and
+ * the next run re-detects the same slip.
+ */
+async function findSlipFlags(
+  items: BoardItemRow[],
+  keyPrefix: string,
+): Promise<SlipDetection> {
+  const stored = new Map<string, string | null>();
+  for (const { item } of shipCandidates(items)) {
+    stored.set(
+      item.id,
+      (await redis().get(`${keyPrefix}${item.id}`)) as string | null,
+    );
+  }
+  return evaluateSlips(items, stored, keyPrefix);
+}
+
+/**
+ * Two-phase triage: which ship writes may be committed after the DM
+ * loop. Non-slip writes always commit (state seed / TTL refresh). A
+ * slip's write commits ONLY when no recipient still needs its DM — a
+ * recipient whose fresh set contained the flag but whose DM failed holds
+ * the key, so the next run re-detects the slip; per-recipient stateHash
+ * de-dup keeps already-notified recipients from being re-DMed. A slip
+ * fresh for nobody (everyone de-duped as already notified) commits.
+ */
+export function triageShipWrites(
+  shipWrites: ShipWrite[],
+  freshByRecipient: ReadonlyMap<string, Flag[]>,
+  failedRecipients: ReadonlySet<string>,
+): ShipWrite[] {
+  const heldItemIds = new Set<string>();
+  for (const userId of failedRecipients) {
+    for (const f of freshByRecipient.get(userId) ?? []) {
+      // Slip flags carry the `<itemId>:slip` de-dup identity; status and
+      // missed-ship flags never gate ship-state writes.
+      if (f.dedupId === `${f.item.id}:slip`) heldItemIds.add(f.item.id);
+    }
+  }
+  return shipWrites.filter((w) => !w.isSlip || !heldItemIds.has(w.itemId));
+}
+
+/**
+ * Commit phase. Best-effort: a Redis failure here only means the next
+ * run re-reads slightly stale ship state — never fail a run whose DMs
+ * already landed.
+ */
+async function commitShipWrites(writes: ShipWrite[]): Promise<void> {
+  try {
+    for (const w of writes) {
+      await redis().set(w.key, w.current, { ex: SHIP_TTL_SECONDS });
+    }
+  } catch (err) {
+    logger.warn("ship-date state write failed — slips re-evaluate next run", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 function alertLine(f: Flag): string {
@@ -223,7 +330,11 @@ export const marcoProductionAlert = schedules.task({
       return { ok: false, skipped: "monday_unreachable" };
     }
 
-    const flags = [...findFlags(items), ...(await findSlipFlags(items))];
+    // Slip detection reads (and later writes) the mode's own ship-state
+    // prefix — a slip observed under DRY_RUN must not consume the real
+    // stored ship date.
+    const slipDetection = await findSlipFlags(items, shipKeyPrefix(dryRun));
+    const flags = [...findFlags(items), ...slipDetection.flags];
 
     // De-dup PER RECIPIENT: only alert a recipient when the flag's state
     // changed since the last DM that actually reached them. DRY_RUN uses
@@ -244,6 +355,9 @@ export const marcoProductionAlert = schedules.task({
     }
 
     if (freshByRecipient.size === 0) {
+      // No DMs owed this run — any detected slip was already delivered
+      // to every recipient (de-dup), so every ship observation commits.
+      await commitShipWrites(slipDetection.shipWrites);
       // Safe to say only because meta.complete was verified above.
       logger.info("no new production flags", { totalFlagged: flags.length });
       return { ok: true, flagged: flags.length, alerted: 0 };
@@ -267,6 +381,7 @@ export const marcoProductionAlert = schedules.task({
     // DM each recipient their own fresh set; mark a flag delivered for a
     // recipient ONLY after their DM succeeded.
     let notified = 0;
+    const failedRecipients = new Set<string>();
     for (const userId of recipients) {
       const freshForUser = freshByRecipient.get(userId);
       if (!freshForUser) continue;
@@ -281,12 +396,19 @@ export const marcoProductionAlert = schedules.task({
           });
         }
       } catch (err) {
+        failedRecipients.add(userId);
         logger.error("production-alert DM failed — de-dup NOT marked, will retry next slot", {
           userId,
           error: err instanceof Error ? err.message : String(err),
         });
       }
     }
+
+    // Two-phase commit of ship state: non-slip observations always land;
+    // a slip's key lands only when every recipient owed the DM got it.
+    await commitShipWrites(
+      triageShipWrites(slipDetection.shipWrites, freshByRecipient, failedRecipients),
+    );
 
     logger.info("production alerts sent", {
       alerted: unionFresh.length,
