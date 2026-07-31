@@ -8,6 +8,8 @@
 import {
   fuzzyFindItems,
   getItemWithColumns,
+  resolveCandidates,
+  formatCandidateList,
   BOARDS,
 } from "../../lib/monday.js";
 
@@ -30,37 +32,40 @@ export async function leadCheck(query: string): Promise<string> {
 }
 
 async function leadCheckFromMonday(query: string): Promise<string> {
+  // Tie-breaking centralized in resolveCandidates (finding 5).
+  const resolution = resolveCandidates(
+    await fuzzyFindItems(query, { limit: 3, boards: [BOARDS.LEADS] }),
+  );
 
-  const candidates = await fuzzyFindItems(query, {
-    limit: 3,
-    boards: [BOARDS.LEADS],
-  });
-
-  if (candidates.length === 0) {
-    // Fall back to contacts
-    const contactCandidates = await fuzzyFindItems(query, {
-      limit: 1,
-      boards: [BOARDS.CONTACTS],
-    });
-    if (contactCandidates.length > 0 && contactCandidates[0].score > 0.3) {
+  if (resolution.kind === "none") {
+    // Fall back to contacts. Limit 3 so a contact-side tie is visible.
+    const contactResolution = resolveCandidates(
+      await fuzzyFindItems(query, { limit: 3, boards: [BOARDS.CONTACTS] }),
+    );
+    if (contactResolution.kind === "ambiguous") {
       return (
-        `*${query}* isn't in Leads — but I found *${contactCandidates[0].name}* in Contacts. ` +
+        `*${query}* isn't in Leads, but several contacts match:\n` +
+        `${formatCandidateList(contactResolution.candidates)}\nWhich one?`
+      );
+    }
+    if (contactResolution.kind === "match") {
+      return (
+        `*${query}* isn't in Leads — but I found *${contactResolution.top.name}* in Contacts. ` +
         `They may have already been converted. Want me to check their deal status instead?`
       );
     }
     return `I couldn't find *${query}* in Leads or Contacts. Try the full name.`;
   }
 
-  const top = candidates[0];
-  if (candidates.length > 1 && top.score - candidates[1].score < 0.15 && top.score < 0.8) {
-    const list = candidates
-      .map((c) => `• *${c.name}*`)
-      .join("\n");
-    return `Multiple leads match *${query}*:\n${list}\nWhich one?`;
+  if (resolution.kind === "ambiguous") {
+    return (
+      `Multiple leads match *${query}*:\n` +
+      `${formatCandidateList(resolution.candidates)}\nWhich one?`
+    );
   }
 
-  const item = await getItemWithColumns(top.id, { includeUpdates: true });
-  if (!item) return `Found *${top.name}* but couldn't load details.`;
+  const item = await getItemWithColumns(resolution.top.id, { includeUpdates: true });
+  if (!item) return `Found *${resolution.top.name}* but couldn't load details.`;
 
   const status = item.columns["Status"] ?? "unknown";
   const fullName = item.columns["Full Name"] ?? item.name;

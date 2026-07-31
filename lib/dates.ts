@@ -67,3 +67,11 @@ export function startOfIsoWeekUtc(d: Date): Date {
 export function isSameIsoWeek(a: Date, b: Date): boolean {
   return startOfIsoWeekUtc(a).getTime() === startOfIsoWeekUtc(b).getTime();
 }
+
+/**
+ * Calendar-day shift, time of day preserved. Used by board-stats to turn
+ * "next week" into an ISO-week comparison against now + 7 days.
+ */
+export function addDays(d: Date, days: number): Date {
+  return new Date(d.getTime() + days * DAY_MS);
+}

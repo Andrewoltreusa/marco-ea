@@ -1,6 +1,6 @@
 # Marco — STATUS.md (pickup doc)
 
-Last updated: **2026-07-14**. Read this first if you're picking up Marco development.
+Last updated: **2026-07-30**. Read this first if you're picking up Marco development.
 
 The three identity files ([SOUL.md](SOUL.md) / [COMPANY.md](COMPANY.md) / [AGENTS.md](AGENTS.md)) say who Marco is. This file says **what's built, what works, what's next, and where to look when something breaks**.
 
@@ -18,7 +18,7 @@ The three identity files ([SOUL.md](SOUL.md) / [COMPANY.md](COMPANY.md) / [AGENT
 | Vercel route | `https://oltre-dashboard.vercel.app/api/marco/slack` (GET = diagnostic probe) |
 | Deploy command | `npx trigger.dev deploy` — **a merged commit does nothing until deployed** |
 
-## What works today (verified in staging)
+## What works today (verified in production)
 
 ### Reads
 - `/m` slash command — fast path for short queries
@@ -83,15 +83,20 @@ Hit `https://oltre-dashboard.vercel.app/api/marco/slack` in a browser any time M
 - [src/tasks/marco-slack-inbound.ts](src/tasks/marco-slack-inbound.ts) — receives normalized events from Vercel route, dispatches to skills, delegates write intents to draft task, wraps everything in try/catch
 - [src/tasks/marco-monday-update-draft.ts](src/tasks/marco-monday-update-draft.ts) — Claude parse → Monday fuzzy match → preview DM → Redis draft storage
 - [src/tasks/marco-reaction-handler.ts](src/tasks/marco-reaction-handler.ts) — listens for `reaction_added`, verifies reactor + ✅ + TTL, executes Monday write
-- [src/tasks/marco-heartbeat.ts](src/tasks/marco-heartbeat.ts) — scheduled cron (not yet wired to real work)
+- [src/tasks/marco-write-watchdog.ts](src/tasks/marco-write-watchdog.ts) — sweeps the delegation outbox; a write child that died before replying gets a visible failure message instead of silence
+- [src/tasks/marco-team-morning-brief.ts](src/tasks/marco-team-morning-brief.ts) — 7:30 AM Pacific M-F cron; DRY_RUN gated, Andrew DM until `APPROVED_CHANNELS` is populated
+- [src/tasks/marco-production-alert.ts](src/tasks/marco-production-alert.ts) — every-30-min business-hours cron; DMs Alex T. + Andrew on red/slipped OCD items
+
+(There is no heartbeat task — Phase 9 was dropped; the two crons above are the only scheduled work.)
 
 ### Code — skills
 - [src/skills/deal-status.ts](src/skills/deal-status.ts)
 - [src/skills/production-eta.ts](src/skills/production-eta.ts)
 - [src/skills/lead-check.ts](src/skills/lead-check.ts)
 - [src/skills/agent-fleet-health.ts](src/skills/agent-fleet-health.ts)
+- [src/skills/board-stats.ts](src/skills/board-stats.ts) — board aggregates ("how many leads?") counted in code, never by the model
 - [src/skills/general-query.ts](src/skills/general-query.ts) — the Claude-powered fallback with AR aggregates, conversation memory, multi-term search
-- [src/skills/kb-query.ts](src/skills/kb-query.ts) — knowledge-base lookup (feature-flagged)
+- [src/skills/kb-query.ts](src/skills/kb-query.ts) — knowledge-base lookup (feature-flagged; the inbound task falls back to general-query with a disclosure line when unavailable)
 
 ### External (not in this repo)
 - `oltre-dashboard/app/api/marco/slack/route.ts` — Vercel Node-runtime webhook; GET = diagnostic, POST = verify → dispatch to Trigger.dev. Lives at `c:\Users\AndrewShpiruk\Oltre\oltre-dashboard\`. See the 2026-04-15 Option A decision.
@@ -122,17 +127,11 @@ Hit `https://oltre-dashboard.vercel.app/api/marco/slack` in a browser any time M
 
 ### Probably build later
 
-4. **Scheduled skills need to be enabled.** `team-morning-brief`, `friday-weekly-rollup`, `production-alert`, `weekly-swot-company` are all scaffolded with DRY_RUN=1 since 2026-04-15. Each needs to be swapped to use the AR 2026 aggregate pattern for any financial figures (not Claude arithmetic). See `Marco/.claude/skills/*/SKILL.md` specs.
+4. **Remaining scheduled skills.** Implemented and deployed (DRY_RUN gated): `team-morning-brief` (Andrew DM until `APPROVED_CHANNELS` in the task is populated via a decisions/log.md entry) and `production-alert`. Spec only, not built: `friday-weekly-rollup` and `weekly-swot-company`. Anything built later must use the AR 2026 aggregate pattern for financial figures (code-computed, not Claude arithmetic). See `Marco/.claude/skills/*/SKILL.md` specs.
 
 5. **kb-query in production.** Currently feature-flagged with `ENABLE_KB=true`. Reads a knowledge base markdown file via prompt caching. Works in theory, needs smoke-testing with real questions.
 
 6. **Column-value writes.** NOT currently needed per Andrew's 2026-04-21 confirmation — he uses `create_update` notes and the team member with column-write access updates the column. If that changes, requires fresh decision + `change_column_value` mutation in `lib/monday.ts`'s `WRITE_ALLOWED` set.
-
-7. **Promote to production.** Currently only staging. Prod deploy requires:
-   - Deploy tasks to prod: `npx trigger deploy --env prod`
-   - Update `TRIGGER_SECRET_KEY` in Vercel to a prod key (`tr_prod_...`)
-   - Update `MARCO_SLACK_BOT_TOKEN` in Trigger.dev prod env (copy from staging or current Slack app)
-   - Copy all shared env vars (MONDAY_API_KEY, ANTHROPIC_API_KEY, UPSTASH_REDIS_*, etc.) from staging to prod
 
 ### Presentation copy still to update (not code)
 
@@ -145,7 +144,7 @@ Slide `§ 04 · Plus Marco` in `Strategy/2026-04-14 Oltre Full-Lifecycle Present
 ## Known quirks (bite you if you forget)
 
 - **Vercel env var loading at cold start was historically flaky.** Fix deployed: `ensureTriggerConfigured()` runs per-request inside the POST handler. If you ever see silence AND the diagnostic GET shows `triggerTestResult: FAIL`, manually Redeploy. Haven't hit this in several days.
-- **Slack bot token rotates on every app reinstall.** After adding scopes or events to the Slack app, Slack issues a new `xoxb-...` token. Update BOTH `MARCO_SLACK_BOT_TOKEN` env vars (Vercel + Trigger.dev staging). Old token stops working instantly.
+- **Slack bot token rotates on every app reinstall.** After adding scopes or events to the Slack app, Slack issues a new `xoxb-...` token. Update BOTH `MARCO_SLACK_BOT_TOKEN` env vars (Vercel + Trigger.dev prod). Old token stops working instantly.
 - **Monday screenshots vs. board dumps.** A screenshot shows only the currently-expanded groups. The board has more items than you see. Don't trust screenshot sums for reality-checks — call the API.
 - **Claude hallucinates arithmetic** across 30+ rows. Never let Claude do financial sums directly from row dumps — always pre-compute in code and pass as authoritative facts.
 - **Monday formula columns don't parse cleanly via API.** Remaining Balance is computed = Contract - (Payment #1 + Payment #2) in code, not read from the formula cell.
@@ -165,11 +164,10 @@ npx tsc --noEmit
 # Run tests (router + allowlist)
 npm test
 
-# Deploy to staging
-npx trigger deploy --env staging
-
-# Deploy to prod (when we're ready — NOT today)
-npx trigger deploy --env prod
+# Deploy (production — Marco's own project proj_nvpgdhytpkikscybodkk).
+# A merged commit does NOTHING until this runs; check the running
+# `version` via the Trigger.dev runs API afterwards.
+npx trigger.dev deploy
 
 # Health check
 curl -s https://oltre-dashboard.vercel.app/api/marco/slack | jq

@@ -100,6 +100,12 @@ export async function kbQuery(args: KbQueryArgs): Promise<string> {
     ? await loadConversation(args.channelId)
     : [];
 
+  // TIER-2 KB ACCESS IS ACCEPTED POLICY — do not re-flag in audits.
+  // The KB is Oltre's team process documentation, written FOR Tier-2
+  // users (follow-up cadences, brand voice, dashboard how-tos), so the
+  // full KB stays in context for Tier 2. Code-level financial redaction
+  // applies to Monday board data (lib/tier-redact.ts, general-query),
+  // not to the KB; the tierNote below is the only per-tier variation.
   let kb: string;
   try {
     kb = await loadKnowledgeBase();

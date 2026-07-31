@@ -307,6 +307,69 @@ function scoreMatch(name: string, q: string, qTokens: string[]): number {
 }
 
 // ─────────────────────────────────────────────────────────────
+// Candidate resolution — ONE tie-break policy for every read skill
+// ─────────────────────────────────────────────────────────────
+
+export type CandidateResolution =
+  | { kind: "match"; top: MondayItem }
+  | { kind: "ambiguous"; candidates: MondayItem[] }
+  | { kind: "none" };
+
+/**
+ * Resolve a fuzzy-candidate list to exactly one of: a confident match,
+ * an ambiguous set the user must disambiguate, or nothing usable.
+ *
+ * Rules (finding 5 — replaces three copy-pasted guards in deal-status /
+ * production-eta / lead-check):
+ *  - top score < minScore → none. This applies on the PRIMARY path too:
+ *    a lone weak token match (e.g. score 0.08) must never auto-select.
+ *  - runner-up within tieMargin of top → ambiguous REGARDLESS of the top
+ *    score. Two exact-name duplicates both scoring 1.0 are a tie the
+ *    user has to break — the old `top.score < 0.8` escape auto-picked
+ *    one of them. Only candidates at or above minScore count as
+ *    runners-up (a sub-threshold match can't manufacture a tie).
+ *  - otherwise → match.
+ *
+ * Callers should fetch candidates with limit >= 3 so ties are visible —
+ * a limit-1 fetch can never expose the runner-up.
+ */
+export function resolveCandidates(
+  candidates: MondayItem[],
+  opts: { minScore?: number; tieMargin?: number } = {},
+): CandidateResolution {
+  const minScore = opts.minScore ?? 0.3;
+  const tieMargin = opts.tieMargin ?? 0.15;
+  const viable = [...candidates]
+    .sort((a, b) => b.score - a.score)
+    .filter((c) => c.score >= minScore);
+  const top = viable[0];
+  if (!top) return { kind: "none" };
+  if (viable.length > 1 && top.score - viable[1].score < tieMargin) {
+    return { kind: "ambiguous", candidates: viable };
+  }
+  return { kind: "match", top };
+}
+
+/** Canonical Monday item URL — the single place the workspace host lives. */
+export function itemUrl(boardId: string, itemId: string): string {
+  return `https://oregonfivestar-company.monday.com/boards/${boardId}/pulses/${itemId}`;
+}
+
+/**
+ * Slack-formatted bullet list of candidates (board + Monday URL) for
+ * ambiguous replies — shared by the read skills so the disambiguation
+ * prompt looks the same everywhere.
+ */
+export function formatCandidateList(candidates: MondayItem[]): string {
+  return candidates
+    .map(
+      (c) =>
+        `• *${c.name}* (${c.boardName}) — <${itemUrl(c.boardId, c.id)}|View>`,
+    )
+    .join("\n");
+}
+
+// ─────────────────────────────────────────────────────────────
 // Relation links — items connected via board_relation columns
 // ─────────────────────────────────────────────────────────────
 
@@ -440,7 +503,7 @@ export async function getBoardItems(
     return {
       id: item.id,
       name: item.name,
-      url: `https://oregonfivestar-company.monday.com/boards/${board.id}/pulses/${item.id}`,
+      url: itemUrl(board.id, item.id),
       updatedAt: item.updated_at ?? undefined,
       columns,
     };
@@ -595,7 +658,7 @@ export async function getItemWithColumns(
     name: item.name,
     boardId: item.board.id,
     boardName: item.board.name,
-    url: `https://oregonfivestar-company.monday.com/boards/${item.board.id}/pulses/${item.id}`,
+    url: itemUrl(item.board.id, item.id),
     columns,
     updates: (item.updates ?? []).map((u) => ({
       text: u.text_body,
@@ -604,25 +667,10 @@ export async function getItemWithColumns(
   };
 }
 
-/**
- * Fuzzy-find items and return the top match with full column values.
- * Convenience wrapper used by read skills.
- */
-export async function findAndLoad(
-  query: string,
-  opts?: { boards?: string[]; includeUpdates?: boolean },
-): Promise<{ item: ItemWithColumns; score: number } | null> {
-  const candidates = await fuzzyFindItems(query, {
-    limit: 1,
-    boards: opts?.boards,
-  });
-  if (candidates.length === 0 || candidates[0].score < 0.3) return null;
-  const full = await getItemWithColumns(candidates[0].id, {
-    includeUpdates: opts?.includeUpdates,
-  });
-  if (!full) return null;
-  return { item: full, score: candidates[0].score };
-}
+// (findAndLoad — the old limit-1 "take the top hit" wrapper — was removed
+// with finding 5: every read skill now resolves candidates through
+// resolveCandidates so ties and weak matches surface instead of
+// auto-selecting.)
 
 // ─────────────────────────────────────────────────────────────
 // WRITE: create_update (the only mutation Marco is allowed)
@@ -682,6 +730,6 @@ export async function createItemUpdate(args: {
     itemName: item.name,
     boardId: item.boardId,
     boardName,
-    url: `https://oregonfivestar-company.monday.com/boards/${item.boardId}/pulses/${item.id}`,
+    url: itemUrl(item.boardId, item.id),
   };
 }
