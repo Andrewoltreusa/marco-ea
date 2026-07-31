@@ -2,6 +2,56 @@
 
 Reviewed 2026-07-29.
 
+## Disposition (updated 2026-07-31 — remediation complete through Wave 6)
+
+Every finding was independently re-verified in code before fixing. Waves:
+W1–W4 = first remediation round (2026-07-29, v20260729.x); W5 = exactly-once
+write path (2026-07-30, v20260730.1, dashboard ef880b4); W6 = P1 round
+(2026-07-30, v20260731.2). Details per wave in `decisions/log.md`.
+
+| # | Finding (short) | Disposition | Wave |
+|---|---|---|---|
+| 1 | Event consumed before ack/answer | **Fixed** — lifecycle record + CAS takeover + delegated phase + write-watchdog | W1, W5 |
+| 2 | Network calls outlive tasks | **Fixed** — bounded clients (W1), per-task budget propagated into every call (W5) | W1, W5 |
+| 3 | Tier filtering by prompt; conversation state crosses users | **Fixed** — per-user DM-only memory (W1); code-enforced Tier-2 redaction, lib/tier-redact.ts (W6) | W1, W6 |
+| 4 | Approval not exactly-once | **Fixed** — draft state machine (Lua CAS), Monday reconciliation, cool-down; 7-scenario acceptance battery vs production | W1, W5 |
+| 5 | Duplicate auto-select; attribution not server-verified | **Fixed** — server-derived signature (W1); shared resolveCandidates, exact-tie always disambiguates (W6) | W1, W6 |
+| 6 | Reaction/re-confirm silence paths | **Fixed** — never-silent handler (W1); real 12–24h re-confirm, replay-proof eventTs gate (W5) | W1, W5 |
+| 7 | Preview + Tier-2 single-draft mismatch | **Fixed** — DM previews (W1); owner-token reservation, live sentinel blocks, atomic pointer ops (W5) | W1, W5 |
+| 8 | Slack fallback not durable | **Fixed** — DM fallback + ok-checks (W1); enqueue failures 503 so Slack retries (W5 route) | W1, W5 |
+| 9 | Tier-3 limit process-local; ingress ordering | **Fixed** — tier-first ordering (W1); durable Redis 24h window, E2E-verified cross-run (W6) | W1, W6 |
+| 10 | Webhook accepts unsupported shapes | **Fixed** — event whitelist, team assert, self filter | W1 |
+| 11 | Diagnostic leaks metadata / false green | **Fixed** — bearer-gated deep probe, minimal public response | W3 |
+| 12 | Obsolete Monday API version | **Refuted as written** (2025-04 was live-supported; verified against the API) — pin bumped to 2026-07 current anyway + live contract test + effective-version drift log | W2, 07-31 |
+| 13 | Missing/truncated boards → authoritative answers | **Fixed** — cursor pagination + completeness metadata + throw-on-missing (W2); general-query truncation caveat (W6) | W2, W6 |
+| 14 | Financial availability/month semantics | **Fixed** — fail-closed AR, byShipMonth honesty | W2 |
+| 15 | KB cold-worker reads | **Fixed** — Redis + LKG cache layers | W2 |
+| 16 | KB completeness contract | **Fixed** — size+sentinel gate (W2); section-count ≥20 + section-24 tail, validate-on-read, awaited refresh (W6) | W2, W6 |
+| 17 | KB config not reproducible | **Fixed** — env matrix + INSTALL.md rewrite; ENABLE_KB documented | W2, W3 |
+| 18 | Routing/extraction failures | **Fixed** — explicit log-command detection, board-stats skill, extractSubject verb strip | W4 |
+| 19 | Advertised skills don't meet contracts | **Fixed** — lead-check honesty line, deal-status payment line, find-in-vault label retired | W4 |
+| 20 | Fleet health unknown=healthy + committed credential | **Fixed** — explicit healthy allowlist, env token (W2); literal scrubbed from all prose files (W6); token rotated 2026-07-31 | W2, W6 |
+| 21 | Proactive product incomplete; heartbeat false green | **Partial** — heartbeat deleted, alert+brief live (DRY_RUN=0 since 2026-07-31, channel decision 2026-08-07); rollup + SWOT remain spec-only (roadmap) | W3 |
+| 22 | Alert suppressed that nobody received | **Fixed** — per-recipient dedup on DM success (W3); two-phase ship-date state, DRY_RUN shadow keys (W6) | W3, W6 |
+| 23 | Brief thinner than spec / destination risk | **Fixed** — code-side APPROVED_CHANNELS gate, validation + raw-facts fallback (W3); numeric grounding vs facts block (W6) | W3, W6 |
+| 24 | Artifact persistence blocks delivery | **Fixed** — delivery first, archival best-effort | W3 |
+| 25 | Deploy commands broken; no HEAD proof | **Fixed** — bin name, predeploy typecheck+test, CI, version verified per deploy | W3 |
+| 26 | Install guide broken | **Fixed** — INSTALL.md rewritten (manifest, env matrix, verification) | W3 |
+| 27 | "Team" = four people | **Parked — Andrew** — onboarding needs Slack IDs + tier assignments as a decisions entry | — |
+| 28 | Tests/CI don't cover guarantees | **Fixed** — 17 → 192 tests, CI on PRs+main, tests typechecked | W3–W6 |
+| 29 | Allowlist drift | **Fixed** — CI drift check (doc IDs vs compiled table) | W3 |
+| 30 | Contradictory docs | **Fixed** — README/STATUS/AGENTS/SKILL truth pass (W6); ROADMAP + this disposition table (07-31) | W6, 07-31 |
+| 31 | Voice rules unvalidated | **Fixed** — brief validator (no !/emoji + numeric grounding); persona single-sourced; anti-fabrication rule | W4, W6 |
+| 32 | No durable audit/SLO | **Fixed** — marco:audit:requests (capped 1000), honest terminal-event audit from the write child | W4, W5 |
+| 33 | Config duplicated across repos | **Partial** — Marco's route uses per-call clientConfig (root-caused the cross-route race); freight/HQ routes still carry the global-configure pattern — dashboard-side work, flagged to Andrew | W3 |
+| 34 | Dependency advisories | **Parked** — upgrades on a controlled branch now that CI exists (deliberate, not forgotten) | — |
+| 35 | Tracked script bypasses mutation boundary | **Fixed** — scratch-kbwrite.mts deleted | W3 |
+| 36 | Icon mismatch | **Parked** — cosmetic; no code path reads the icon | — |
+
+Open set as of 2026-07-31: **#27 (team onboarding — Andrew), #33 (freight/HQ
+routes — dashboard repo), #34 (dependency branch), #36 (cosmetic), and the
+#21 remainder (rollup/SWOT are roadmap items, not defects).**
+
 ## Scope and verdict
 
 This review covered every tracked file in the Marco repository, including the

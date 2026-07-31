@@ -15,8 +15,8 @@ Do not edit without an explicit written decision from Andrew Shpiruk in `decisio
 Tier 1 capabilities at Level 2:
 - Every read skill (deal-status, production-eta, lead-check, agent-fleet-health, find-in-vault once wired).
 - **Monday `create_update` writes** via the draft-and-react-✅ flow. Target boards: Deals (`6466800590`), Leads (`6466800613`), Contacts (`6466800570`).
-- **12-hour draft TTL.** If Andrew reacts ✅ on a draft older than 12 hours, Marco re-confirms before firing.
-- Full signature freedom — Tier 1 drafts can be signed with any attribution Andrew wants, including `— Andrew via Marco` (default).
+- **24-hour draft TTL with a 12-hour re-confirm gate.** A ✅ on a draft older than 12 hours triggers a re-confirm ask; a second, newer ✅ executes.
+- **Signature is forced to `— Andrew via Marco`** — same enforcement as Tier 2, per Andrew's 2026-07-31 decision ("Should still have my signature"). The signature is what keeps Marco-written updates identifiable in a feed several systems write to.
 - Receives all scheduled broadcasts and alerts.
 
 Tier 1 **cannot** (still deferred to Level 3):
@@ -81,3 +81,4 @@ After that one reply, Marco is silent for the rest of the 24-hour window. Every 
 | 2026-04-15 | Initial allowlist: Andrew Tier 1, Bella + Alex T Tier 2, Alex P pending Slack ID | Marco bootstrap |
 | 2026-04-15 | Alex P Slack ID resolved to `U04DKJV7SAV`, promoted to Tier 2 active | Andrew confirmation |
 | 2026-04-15 | **Phase 6a** — Marco promoted to **Level 2 (Draft & Wait)**. Tier 1 + Tier 2 can request Monday `create_update` writes gated by ✅ reaction. Tier 2 gets 2h TTL and forced self-signature; Tier 1 gets 12h TTL and signature freedom. See `decisions/2026-04-15-phase-6a-level-2.md`. | Andrew verbal decision in Slack |
+| 2026-07-31 | Tier-1 signature freedom **dropped** — forced `— Andrew via Marco` for every tier (Andrew: "Should still have my signature"). Tier-1 draft TTL corrected to 24h with the 12h re-confirm gate (matches the Wave-5 implementation). | Andrew decision, decisions/log.md 2026-07-31 |

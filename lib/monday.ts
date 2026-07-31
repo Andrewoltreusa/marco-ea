@@ -23,16 +23,55 @@ function token(): string {
   return t;
 }
 
+/**
+ * Single source of truth for the Monday API version pin (lib/kb.ts imports
+ * it for its own transport). Verified live 2026-07-31: 2026-07 is the
+ * "current" release; boards/items_page/next_items_page/updated_at/
+ * column{title}/docs blocks(page,limit) all resolve identically to the old
+ * 2025-04 pin, and doc block types are still space-cased ("large title").
+ * lib/monday.contract.test.ts pins these behaviors — run it before and
+ * after any change to this constant.
+ */
+export const MONDAY_API_VERSION = "2026-07";
+
+// One-time-per-process effective-version probe: Monday serves whatever
+// version it maps the header to, and drift (deprecation reroute) is
+// invisible unless asked. Non-blocking — never delays a real query.
+let versionLogged = false;
+export function logEffectiveVersionOnce(): void {
+  if (versionLogged) return;
+  versionLogged = true;
+  fetch(MONDAY_API, {
+    method: "POST",
+    headers: {
+      Authorization: token(),
+      "Content-Type": "application/json",
+      "API-Version": MONDAY_API_VERSION,
+    },
+    body: JSON.stringify({ query: "query { version { kind value } }" }),
+    signal: AbortSignal.timeout(10_000),
+  })
+    .then((r) => r.json())
+    .then((j: { data?: { version?: { kind: string; value: string } } }) => {
+      const v = j.data?.version;
+      const drifted = v && v.value !== MONDAY_API_VERSION;
+      console.info(
+        `[monday] pinned ${MONDAY_API_VERSION}, server resolves ${v?.value ?? "?"} (${v?.kind ?? "?"})${drifted ? " — VERSION DRIFT, update the pin" : ""}`,
+      );
+    })
+    .catch(() => {
+      // observability only — never let the probe surface as a failure
+    });
+}
+
 async function graphql<T>(query: string, variables: Record<string, unknown> = {}): Promise<T> {
+  logEffectiveVersionOnce();
   const res = await fetch(MONDAY_API, {
     method: "POST",
     headers: {
       Authorization: token(),
       "Content-Type": "application/json",
-      // Verified live 2026-07-29: boards/items_page/next_items_page/updated_at
-      // all resolve on 2025-04 with Marco's key (2024-01 was deprecated and
-      // silently rerouted by Monday). 2025-07 also works if this ages out.
-      "API-Version": "2025-04",
+      "API-Version": MONDAY_API_VERSION,
     },
     body: JSON.stringify({ query, variables }),
     // 25s deadline, clamped to the run's remaining budget — a hung Monday
