@@ -39,7 +39,7 @@ import {
   topOutstanding,
   type ArAggregates,
 } from "../../lib/ar.js";
-import { redactMatchesForTier2 } from "../../lib/tier-redact.js";
+import { redactMatchesForTier2, TIER2_PROMPT_NOTE } from "../../lib/tier-redact.js";
 
 const ALL_SEARCH_BOARDS = [
   BOARDS.DEALS,
@@ -396,7 +396,7 @@ GENERAL-QUERY RULES (applied on top of the persona; Monday data is provided belo
       },
       {
         type: "text",
-        text: `${tier === 2 ? "This is a Tier 2 user — don't include financial details beyond deal value and status." : "This is Tier 1 (Andrew) — full detail."}
+        text: `${tier === 2 ? TIER2_PROMPT_NOTE : "This is Tier 1 (Andrew) — full detail."}
 
 Monday.com per-entity search results:
 ${mondayContext}${arContext}`,

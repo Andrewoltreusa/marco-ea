@@ -47,9 +47,13 @@ export interface RoutedRequest {
   rateLimited?: boolean;
 }
 
+// Reworded per Andrew 2026-08-13 (decisions/log.md) — the old "I'm not
+// configured to respond to you" read as robotic; the new text explains the
+// mechanism (approved list) and the path onto it, and still promises nothing.
 const REFUSAL_TEXT =
-  "I'm Marco, Oltre's company secretary. I'm not configured to respond to you — " +
-  "please ask Andrew Shpiruk directly if you need something from the company.";
+  "I'm Marco, Oltre's company secretary. I can only help teammates on my " +
+  "approved list, and you're not on it yet — ask Andrew Shpiruk if you think " +
+  "you should be.";
 
 // In-memory Tier-3 rate limiter — process-local FALLBACK only. Every
 // Trigger.dev run is a fresh process, so this Map alone cannot hold the

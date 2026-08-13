@@ -35,6 +35,7 @@ Tier 2 users can ask any read-only query AND request Monday `create_update` writ
 | Bella Babere | `U077KFWGAPP` | Customer Service / Follow-ups |
 | Alex Tretiakov | `U04J52R155H` | Daily Operations Manager |
 | Aleksandr Polkhovskiy | `U04DKJV7SAV` | Owner |
+| Karlie Jervik | `U0BPB2S5JUX` | Customer Service (started 2026-08-12; voice-to-text often renders her as "Carly") |
 
 Tier 2 capabilities:
 - All Phase-6 read skills (deal-status, lead-check, production-eta, agent-fleet-health, find-in-vault when wired).
@@ -53,7 +54,7 @@ Tier 2 capabilities:
 
 Everyone else. Unknown users who DM Marco or mention Marco in a channel get exactly one reply per 24 hours:
 
-> "I'm Marco, Oltre's company secretary. I'm not configured to respond to you — please ask Andrew Shpiruk directly if you need something from the company."
+> "I'm Marco, Oltre's company secretary. I can only help teammates on my approved list, and you're not on it yet — ask Andrew Shpiruk if you think you should be."
 
 After that one reply, Marco is silent for the rest of the 24-hour window. Every Tier-3 incident is logged to `memory/access-denials.md` with:
 
@@ -82,3 +83,4 @@ After that one reply, Marco is silent for the rest of the 24-hour window. Every 
 | 2026-04-15 | Alex P Slack ID resolved to `U04DKJV7SAV`, promoted to Tier 2 active | Andrew confirmation |
 | 2026-04-15 | **Phase 6a** — Marco promoted to **Level 2 (Draft & Wait)**. Tier 1 + Tier 2 can request Monday `create_update` writes gated by ✅ reaction. Tier 2 gets 2h TTL and forced self-signature; Tier 1 gets 12h TTL and signature freedom. See `decisions/2026-04-15-phase-6a-level-2.md`. | Andrew verbal decision in Slack |
 | 2026-07-31 | Tier-1 signature freedom **dropped** — forced `— Andrew via Marco` for every tier (Andrew: "Should still have my signature"). Tier-1 draft TTL corrected to 24h with the 12h re-confirm gate (matches the Wave-5 implementation). | Andrew decision, decisions/log.md 2026-07-31 |
+| 2026-08-13 | **Karlie Jervik promoted to Tier 2** (`U0BPB2S5JUX`, Customer Service, "same access as Bella" per Andrew). Tier-3 refusal text reworded — same one-refusal-per-24h behavior, warmer wording. | Andrew decision, decisions/log.md 2026-08-13 |

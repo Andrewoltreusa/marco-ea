@@ -24,6 +24,7 @@
 import { anthropic } from "../../lib/anthropic.js";
 import { loadKnowledgeBase } from "../../lib/kb.js";
 import { MARCO_PERSONA } from "../../lib/marco-persona.js";
+import { TIER2_PROMPT_NOTE } from "../../lib/tier-redact.js";
 import {
   loadConversation,
   appendTurn,
@@ -121,9 +122,7 @@ export async function kbQuery(args: KbQueryArgs): Promise<string> {
   const client = anthropic();
 
   const tierNote =
-    args.tier === 2
-      ? "This is a Tier 2 user — don't include financial details beyond deal value and status."
-      : "This is Tier 1 (Andrew) — full detail is fine.";
+    args.tier === 2 ? TIER2_PROMPT_NOTE : "This is Tier 1 (Andrew) — full detail is fine.";
 
   const res = await client.messages.create({
     // Sonnet-class replaces Opus: the KB context does the heavy lifting
