@@ -83,6 +83,20 @@ describe("classifier", () => {
     expect(classifyIntent("Objection - they want to think about it").skill).toBe("kb-query");
   });
 
+  it("routes financial PROCESS questions to kb-query, data questions to general-query", () => {
+    // Live gap 2026-08-13: these two landed in general-query, which cannot
+    // see the SOPs.
+    expect(
+      classifyIntent("how do we handle an aged unpaid invoice on a local install?").skill,
+    ).toBe("kb-query");
+    expect(classifyIntent("what is the process for a damage claim?").skill).toBe(
+      "kb-query",
+    );
+    // Financial DATA questions keep the AR-board path.
+    expect(classifyIntent("how much AR is out?").skill).toBe("general-query");
+    expect(classifyIntent("who owes us the most?").skill).toBe("general-query");
+  });
+
   it("routes how-to questions to kb-query", () => {
     expect(classifyIntent("how do we handle custom colors").skill).toBe("kb-query");
     expect(classifyIntent("how do I send a Sendblue follow-up").skill).toBe("kb-query");

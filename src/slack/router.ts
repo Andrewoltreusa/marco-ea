@@ -177,6 +177,20 @@ export function classifyIntent(
     return { skill: "monday-update", args: { query: raw.trim() } };
   }
 
+  // PROCESS questions go to the KB (the 14-SOP canon, sections 25-32) —
+  // "how do we handle an aged invoice" wants BILLING-001's ladder, not the
+  // AR board dump, so this runs BEFORE the cash/AR rule. Data questions
+  // ("how much is outstanding", "who owes us") fall through to cash/AR.
+  // Live gap found 2026-08-13: "what is the process for a damage claim?"
+  // had no KB route at all and fell to general-query.
+  if (
+    /\b(what(?:'s| is) the (?:process|procedure|policy|sop)|process for|procedure for|how (?:do|does|should) (?:we|i|you)|what do (?:we|i) do (?:when|if))\b/i.test(
+      text,
+    )
+  ) {
+    return { skill: "kb-query", args: { query: raw.trim() } };
+  }
+
   // Cash / AR / contracted / invoiced — route directly to general-query
   // so it picks up the AR 2026 board dump. Keep the raw query text so
   // Claude sees the full question (including month names like "April").
