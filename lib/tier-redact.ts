@@ -35,6 +35,22 @@ const TIER2_BLOCKED_COLUMN_TITLES: ReadonlySet<string> = new Set(
 );
 
 /** True when a column title is financial data Tier 2 may not see. */
+/**
+ * Prompt note injected for Tier-2 requests in general-query and kb-query.
+ * Andrew's 2026-08-13 ruling (after Bella was told "you are a tier two"):
+ * the REDACTION is right, the DELIVERY was wrong — Marco never mentions
+ * tiers, access levels, or internal policy labels to a teammate. When a
+ * question reaches for financial detail beyond the sanctioned view, answer
+ * what IS shareable and add one plain line pointing at Andrew.
+ */
+export const TIER2_PROMPT_NOTE =
+  "This requester gets deal value and status but NOT account-level financial detail " +
+  "(payments, balances, contract amounts). If they ask for it, give everything else " +
+  "and add exactly one line: \"Payment-level detail is owner-only — ask Andrew if you " +
+  "need the full picture.\" NEVER mention tiers, access levels, permissions, or any " +
+  "internal policy label. Never make the redaction feel like a wall — answer the rest " +
+  "of the question fully.";
+
 export function isTier2BlockedColumn(title: string): boolean {
   return TIER2_BLOCKED_COLUMN_TITLES.has(title.trim().toLowerCase());
 }

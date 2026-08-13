@@ -19,10 +19,12 @@ describe("allowlist", () => {
     expect(tierFor("U04D9BPK8H2")).toBe(1);
   });
 
-  it("Bella, Alex T., Alex P. are Tier 2", () => {
+  it("Bella, Alex T., Alex P., Karlie are Tier 2", () => {
     expect(tierFor("U077KFWGAPP")).toBe(2);
     expect(tierFor("U04J52R155H")).toBe(2);
     expect(tierFor("U04DKJV7SAV")).toBe(2);
+    // Karlie Jervik, Customer Service — added 2026-08-13
+    expect(tierFor("U0BPB2S5JUX")).toBe(2);
   });
 
   it("Oltre HQ bot is Tier 3 (never promoted)", () => {

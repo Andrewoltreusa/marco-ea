@@ -4,7 +4,37 @@ Append-only record of architectural and trust decisions. Every entry: date, deci
 
 ---
 
-## 2026-07-31 — Two standing decisions closed; post-rotation repair; Monday pin bumped
+## 2026-08-13 — Karlie Jervik Tier 2; two voice fixes; KB refreshed to the 14-SOP canon
+
+**Karlie Jervik promoted to Tier 2** (`U0BPB2S5JUX`, Customer Service,
+started 2026-08-12, reports to Alex T., trained by Bella). Andrew: "same
+access as Bella" — all read skills plus draft-gated Monday create_update
+with the standard Tier-2 guardrails (2h TTL, one draft at a time, forced
+self-signature). Note for transcripts: voice-to-text renders her name as
+"Carly"; she is Karlie.
+
+**Tier-2 redaction phrasing fixed.** Bella asked about a deal and was told
+the financial detail was withheld "because you are a tier two" — the
+redaction was correct, the delivery was wrong. New shared prompt note
+(lib/tier-redact.ts TIER2_PROMPT_NOTE, used by general-query + kb-query):
+answer everything shareable, add exactly one plain line — "Payment-level
+detail is owner-only — ask Andrew if you need the full picture." — and
+NEVER mention tiers, access levels, or internal policy labels to a
+teammate. Andrew's ruling: the behavior "is about right," the wording is
+what changes.
+
+**Tier-3 refusal reworded** (same one-refusal-per-24h behavior): now
+"I can only help teammates on my approved list, and you're not on it yet —
+ask Andrew Shpiruk if you think you should be." The old "I'm not
+configured to respond to you" read as robotic.
+
+**KB refreshed to the 14-SOP canon.** The AndrewEA SOP program finalized
+14 SOPs on 2026-08-12 (leads ×2, quote ×2, deals, funnel, production ×2,
+ship, install, review, claims, billing, AR). Marco's Monday KB gains new
+phase-grouped sections condensing each SOP's triggers/steps/owners, plus
+corrections where older sections were superseded; the KB completeness
+constants in lib/kb.ts move with the new tail section. Karlie added to
+the team/roles content.
 
 **Tier-1 signature: enforcement stays for every tier, Andrew included.**
 Andrew's words: "Should still have my signature." The Phase-6a

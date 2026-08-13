@@ -19,6 +19,9 @@ export const ALLOWLIST: readonly AllowedUser[] = [
   { slackId: "U077KFWGAPP", name: "Bella Babere", tier: 2 },
   { slackId: "U04J52R155H", name: "Alex Tretiakov", tier: 2 },
   { slackId: "U04DKJV7SAV", name: "Aleksandr Polkhovskiy", tier: 2 },
+  // Customer Service, started 2026-08-12. Voice-to-text renders her name
+  // as "Carly" — she is Karlie. Added by Andrew's decision 2026-08-13.
+  { slackId: "U0BPB2S5JUX", name: "Karlie Jervik", tier: 2 },
 ] as const;
 
 /**
