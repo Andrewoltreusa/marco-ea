@@ -138,7 +138,9 @@ const KB_MIN_CHARS = 50_000;
  * a pagination regression that dropped sections 18–24 would have passed
  * the gate and poisoned the 7-day LKG copy.)
  */
-const KB_TAIL_SECTION_NUMBER = 24;
+// Exported so lib/kb.test.ts builds its fixtures from the live value —
+// bumping this stays a one-line change when the KB grows.
+export const KB_TAIL_SECTION_NUMBER = 32; // 25-32 = the 14-SOP canon + team roles, added 2026-08-13
 
 /**
  * Minimum count of DISTINCT numbered-section headings a complete KB

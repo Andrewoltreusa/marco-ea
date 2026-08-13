@@ -4,7 +4,11 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { validateKbText, validateCachedEntry } from "./kb.js";
+import {
+  validateKbText,
+  validateCachedEntry,
+  KB_TAIL_SECTION_NUMBER as TAIL,
+} from "./kb.js";
 
 /**
  * Synthesize a KB text with numbered sections 1..`sections`, padded so
@@ -22,8 +26,8 @@ function syntheticKb(sections: number, padPerSection = 3_000): string {
 }
 
 describe("validateKbText", () => {
-  it("accepts a complete KB (24 sections, tail present)", () => {
-    expect(validateKbText(syntheticKb(24))).toBeNull();
+  it("accepts a complete KB (tail section present)", () => {
+    expect(validateKbText(syntheticKb(TAIL))).toBeNull();
   });
 
   it("rejects a too-short text before anything else", () => {
@@ -31,7 +35,7 @@ describe("validateKbText", () => {
   });
 
   it("rejects a missing title", () => {
-    const text = syntheticKb(24).replace("Marco Knowledge Base", "Some Doc");
+    const text = syntheticKb(TAIL).replace("Marco Knowledge Base", "Some Doc");
     expect(validateKbText(text)).toMatch(/title/);
   });
 
@@ -42,9 +46,9 @@ describe("validateKbText", () => {
   });
 
   it("rejects a doc missing the tail section even when the count passes", () => {
-    // 23 sections >= the minimum count, but section 24 is the tail sentinel.
-    const problem = validateKbText(syntheticKb(23));
-    expect(problem).toMatch(/section "24\." tail sentinel/);
+    // TAIL-1 sections satisfy the minimum count, but the tail sentinel is gone.
+    const problem = validateKbText(syntheticKb(TAIL - 1));
+    expect(problem).toMatch(new RegExp(`section "${TAIL}\\." tail sentinel`));
   });
 
   it("numbered list items cannot inflate the section count", () => {
@@ -58,14 +62,14 @@ describe("validateKbText", () => {
   });
 
   it("accepts headings with and without markdown # prefixes", () => {
-    const bare = syntheticKb(24).replace(/^## /gm, "");
+    const bare = syntheticKb(TAIL).replace(/^## /gm, "");
     expect(validateKbText(bare)).toBeNull();
   });
 });
 
 describe("validateCachedEntry (validate-on-read)", () => {
   const validEntry = {
-    text: syntheticKb(24),
+    text: syntheticKb(TAIL),
     fetchedAt: Date.now(),
     sourceUpdatedAt: "2026-07-30T00:00:00Z",
   };
